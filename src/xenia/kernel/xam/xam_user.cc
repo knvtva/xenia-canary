@@ -9,6 +9,7 @@
 
 #include <cstring>
 
+#include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/string_util.h"
@@ -16,15 +17,18 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/user_profile.h"
 #include "xenia/kernel/xam/xam_private.h"
+#include "xenia/kernel/xam/xdbf/xdbf.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
+
 
 DECLARE_int32(user_language);
 
 namespace xe {
 namespace kernel {
 namespace xam {
+namespace xdbf {
 
 struct X_PROFILEENUMRESULT {
   xe::be<uint64_t> xuid_offline;  // E0.....
@@ -932,6 +936,49 @@ dword_result_t XamUserGetSubscriptionType_entry(dword_t user_index, dword_t unk2
 }
 DECLARE_XAM_EXPORT1(XamUserGetSubscriptionType, kUserProfiles, kStub);
 
+dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
+    dword_t user_index, dword_t xuid, dword_t flags, dword_t offset,
+    dword_t games_count, lpdword_t buffer_size_ptr, lpdword_t handle_ptr) {
+  std::vector<xdbf::TitlePlayed> titles;
+  kernel_state()->user_profile(user_index)->GetDashboardGpd()->GetTitles(&titles);
+
+  auto e = make_object<XStaticUntypedEnumerator>(
+      kernel_state(), games_count, sizeof(xdbf::X_XDBF_GPD_TITLEPLAYED));
+
+  *handle_ptr = e->handle();
+
+  for (auto title : titles) {
+    // For some reason dashboard gpd stores info about itself
+    if (title.title_id == kDashboardID)
+        continue;
+
+    auto* details = (xdbf::X_XDBF_GPD_TITLEPLAYED*)e->AppendItem();
+    details->title_id = title.title_id;
+    details->achievements_possible = title.achievements_possible;
+    details->achievements_earned = title.achievements_earned;
+    details->gamerscore_total = title.gamerscore_total;
+    details->gamerscore_earned = title.gamerscore_earned;
+    details->reserved_achievement_count = title.reserved_achievement_count;
+    details->all_avatar_awards = title.all_avatar_awards;
+    details->male_avatar_awards = title.male_avatar_awards;
+    details->female_avatar_awards = title.female_avatar_awards;
+    details->reserved_flags = title.reserved_flags;
+    details->last_played = title.last_played;
+
+    // Ensure details->title_name has enough space
+    std::u16string src = title.title_name;
+    std::vector<wchar_t> converted(src.begin(), src.end());
+    converted.push_back('\0');  // Ensure null-termination
+
+    xe::copy_and_swap<wchar_t>((wchar_t*)details->title_name, converted.data(),
+                               converted.size() * sizeof(wchar_t));
+  }
+
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kStub);
+
+}  // namespace xdbf
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

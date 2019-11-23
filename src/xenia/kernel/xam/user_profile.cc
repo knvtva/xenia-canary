@@ -30,7 +30,6 @@ DEFINE_uint64(user_1_xuid, 0, "XUID for user 1", "User");
 DEFINE_uint64(user_2_xuid, 0, "XUID for user 2", "User");
 DEFINE_uint64(user_3_xuid, 0, "XUID for user 3", "User");
 
-constexpr uint32_t kDashboardID = 0xFFFE07D1;
 
 std::u16string X_XAMACCOUNTINFO::GetGamertagString() const { return gamertag; }
 
@@ -312,7 +311,7 @@ void UserProfile::LoadProfile() {
     title_gpds_[title.title_id] = title_gpd;
   }
 
-  XELOGI("Loaded {} profile GPDs", title_gpds_.size() + 1);
+  XELOGI("Loaded %d profile GPDs", title_gpds_.size());
 }
 
 xdbf::GpdFile* UserProfile::SetTitleSpaData(const xdbf::SpaFile* spa_data) {
@@ -664,6 +663,10 @@ void UserProfile::SaveSetting(UserProfile::Setting* setting) {
     // stored some other way.
     XELOGW("Attempting to save unsupported profile setting to disk");
   }
+}
+
+xdbf::GpdFile* UserProfile::GetDashboardGpd() {
+    return &dash_gpd_;
 }
 
 }  // namespace xam

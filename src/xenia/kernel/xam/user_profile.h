@@ -23,6 +23,8 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
+constexpr uint32_t kDashboardID = 0xFFFE07D1;
+
 // from https://github.com/xemio/testdev/blob/master/xkelib/xam/_xamext.h
 #pragma pack(push, 4)
 struct X_XAMACCOUNTINFO {
@@ -349,6 +351,7 @@ class UserProfile {
 
   xdbf::GpdFile* SetTitleSpaData(const xdbf::SpaFile* spa_data);
   xdbf::GpdFile* GetTitleGpd(uint32_t title_id = 0);
+  xdbf::GpdFile* GetDashboardGpd();
 
   void GetTitles(std::vector<xdbf::GpdFile*>& titles);
 

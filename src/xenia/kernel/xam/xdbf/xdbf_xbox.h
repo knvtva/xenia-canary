@@ -125,7 +125,7 @@ struct X_XDBF_GPD_TITLEPLAYED {
   xe::be<uint16_t> female_avatar_awards;
   xe::be<uint32_t> reserved_flags;
   xe::be<uint64_t> last_played;
-  // wchar_t* title_name;
+  xe::be<wchar_t> title_name[64];
 };
 #pragma pack(pop)
 
