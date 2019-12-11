@@ -83,6 +83,10 @@ X_STATUS xeExGetXConfigSetting(uint16_t category, uint16_t setting,
           // TODO(benvanik): get this value.
           xe::store_and_swap<uint32_t>(value, 0);
           break;
+        case 0x0008:  // XCONFIG_DEFAULT_PROFILE
+          setting_size = 8;
+          xe::store_and_swap<uint64_t>(value, 0);
+          break;
         case 0x0009:  // XCONFIG_USER_LANGUAGE
           setting_size = 4;
           xe::store_and_swap<uint32_t>(value, cvars::user_language);
@@ -115,6 +119,30 @@ X_STATUS xeExGetXConfigSetting(uint16_t category, uint16_t setting,
           return X_STATUS_INVALID_PARAMETER_2;
       }
       break;
+    case 0x0007:
+      // XCONFIG_CONSOLE_SETTINGS
+      switch (setting) {
+        case 0x0001: // XCONFIG_SCREENSAVER
+          setting_size = 2;
+          xe::store_and_swap<uint16_t>(value, 0);
+          break;
+        case 0x0002: // XCONFIG_AUTO_SHUTDOWN
+          setting_size = 2;
+          xe::store_and_swap<uint16_t>(value, 0);
+          break;
+        case 0x0004: // XCONFIG_CAMERA_SETTINGS
+          setting_size = 4;
+          xe::store_and_swap<uint32_t>(value, 0);
+          break;
+        case 0x000B:
+          setting_size = 4;
+          xe::store_and_swap<uint32_t>(value, 0);
+          break;
+        default:
+          assert_unhandled_case(setting);
+          return X_STATUS_INVALID_PARAMETER_2;
+    }
+    break;
     default:
       assert_unhandled_case(category);
       return X_STATUS_INVALID_PARAMETER_1;
