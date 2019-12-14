@@ -976,7 +976,30 @@ dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
 
   return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kStub);
+DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kImplemented);
+
+dword_result_t XamReadTile(dword_t section_id, dword_t game_id, qword_t item_id,
+                           dword_t offset, lpdword_t output_ptr,
+                           lpdword_t buffer_size_ptr,
+                           lpdword_t overlapped_ptr) {
+  if (!output_ptr) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
+
+  SpaFile* game_spa =
+      kernel_state()->user_profile(0)->GetTitleSpa(game_id.value());
+
+  if (!game_spa) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
+
+  // Section 2 == images
+  Entry* entry = game_spa->GetEntry(2, item_id.value());
+  memcpy_s(output_ptr, *buffer_size_ptr, entry->data.data(), entry->info.size);
+
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamReadTile, kUserProfiles, kSketchy);
 
 }  // namespace xdbf
 }  // namespace xam
