@@ -172,7 +172,8 @@ UserProfile::UserProfile(uint8_t index,
   // XPROFILE_GAMERCARD_REGION
   AddSetting(std::make_unique<Int32Setting>(0x10040005, 0));
   // XPROFILE_GAMERCARD_CRED
-  AddSetting(std::make_unique<Int32Setting>(0x10040006, 0xFA));
+  AddSetting(
+      std::make_unique<Int32Setting>(0x10040006, CalculateUserGamerscore()));
   // XPROFILE_GAMERCARD_REP
   AddSetting(std::make_unique<FloatSetting>(0x5004000B, 0.0f));
   // XPROFILE_OPTION_VOICE_MUTED
@@ -682,10 +683,20 @@ void UserProfile::SaveSetting(UserProfile::Setting* setting) {
   }
 }
 
-xdbf::GpdFile* UserProfile::GetDashboardGpd() {
-    return &dash_gpd_;
-}
+xdbf::GpdFile* UserProfile::GetDashboardGpd() { return &dash_gpd_; }
 
+
+uint32_t UserProfile::CalculateUserGamerscore() const {
+  uint32_t score = 0;
+
+  std::vector<xdbf::TitlePlayed> titles;
+  dash_gpd_.GetTitles(&titles);
+
+  for (auto title : titles)
+    score += title.gamerscore_earned;
+
+  return score;
+}
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

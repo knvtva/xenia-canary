@@ -374,6 +374,7 @@ class UserProfile {
   std::filesystem::path profile_dir() { return ProfileDir(); }
   uint32_t signin_state() const { return 2; }
   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
+  uint32_t CalculateUserGamerscore() const;
 
   void AddSetting(std::unique_ptr<Setting> setting);
   Setting* GetSetting(uint32_t setting_id);
