@@ -94,8 +94,7 @@ dword_result_t XamProfileEnumerate_entry(dword_t handle, dword_t flags,
         overlapped, result, extended_result, result == X_ERROR_SUCCESS ? 1 : 0);
     return X_ERROR_IO_PENDING;
   } else {
-    assert_always();
-    return X_ERROR_INVALID_PARAMETER;
+    return result;
   }
 }
 DECLARE_XAM_EXPORT1(XamProfileEnumerate, kUserProfiles, kImplemented);
