@@ -185,7 +185,8 @@ UserProfile::UserProfile(uint8_t index,
   // XPROFILE_GAMERCARD_MOTTO
   AddSetting(std::make_unique<UnicodeSetting>(0x402C0011, u""));
   // XPROFILE_GAMERCARD_TITLES_PLAYED
-  AddSetting(std::make_unique<Int32Setting>(0x10040012, 1));
+  AddSetting(
+      std::make_unique<Int32Setting>(0x10040012, GetAmountOfPlayedTitles()));
   // XPROFILE_GAMERCARD_ACHIEVEMENTS_EARNED
   AddSetting(std::make_unique<Int32Setting>(0x10040013, 0));
   // XPROFILE_GAMER_DIFFICULTY
