@@ -162,7 +162,7 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
   }
 
   std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
-  if (user_index > 3) {
+  if (user_index > 3 && user_index != 0xFF) {
     return X_E_NO_SUCH_USER;
   }
 
