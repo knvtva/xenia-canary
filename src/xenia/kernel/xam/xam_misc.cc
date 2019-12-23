@@ -19,6 +19,11 @@ dword_result_t XamFirstRunExperienceShouldRun_entry() {
 }
 DECLARE_XAM_EXPORT1(XamFirstRunExperienceShouldRun, kMisc, kStub);
 
+dword_result_t XamIsXbox1TitleId(dword_t title_id) {
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XamIsXbox1TitleId, kMisc, kStub);
+
 void RegisterMiscExports(xe::cpu::ExportResolver* export_resolver,
                            KernelState* kernel_state) {}
 }  // namespace xam
