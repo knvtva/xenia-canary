@@ -961,8 +961,13 @@ dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
     }
 
     // For some reason dashboard gpd stores info about itself
-    if (title.title_id == kDashboardID)
-        continue;
+    if (title.title_id == kDashboardID) 
+      continue;
+
+    // TODO: Look for better check to provide information about demo title
+    // or system title
+    if (!title.gamerscore_total || !title.achievements_possible) 
+      continue;
 
     auto* details = (xdbf::X_XDBF_GPD_TITLEPLAYED*)e->AppendItem();
     details->title_id = title.title_id;
@@ -991,7 +996,8 @@ dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
 
   return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kImplemented);
+DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles,
+                    kImplemented);
 
 dword_result_t XamReadTile_entry(dword_t tile_type, dword_t game_id, qword_t item_id,
                            dword_t offset, lpdword_t output_ptr,
