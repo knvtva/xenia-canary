@@ -280,11 +280,23 @@ void UserProfile::LoadProfile() {
     XELOGW(
         "Failed to open dash GPD (FFFE07D1.gpd) for reading, using blank one");
     return;
+  } else {
+    dash_gpd_.Read(mmap_->data(), mmap_->size());
+    mmap_->Close();
+
+    // Create empty settings syncdata, helps tools identify this XDBF as a GPD
+    xdbf::Entry ent;
+    ent.info.section = static_cast<uint16_t>(xdbf::GpdSection::kSetting);
+    ent.info.id = 0x200000000;
+    ent.data.resize(0x18);
+    memset(ent.data.data(), 0, 0x18);
+    dash_gpd_.UpdateEntry(ent);
   }
 
-  dash_gpd_.Read(mmap_->data(), mmap_->size());
-  mmap_->Close();
+  // Make sure the dash GPD is up-to-date
+  UpdateGpd(kDashboardID, dash_gpd_);
 
+  // Load in any extra game GPDs
   std::vector<xdbf::TitlePlayed> titles;
   dash_gpd_.GetTitles(&titles);
 
