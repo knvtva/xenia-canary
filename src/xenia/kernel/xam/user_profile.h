@@ -25,6 +25,34 @@ namespace xam {
 
 constexpr uint32_t kDashboardID = 0xFFFE07D1;
 
+// https://github.com/jogolden/testdev/blob/master/xkelib/xam/_xamext.h#L68
+enum class XTileType {
+  kAchievement,
+  kGameIcon,
+  kGamerTile,
+  kGamerTileSmall,
+  kLocalGamerTile,
+  kLocalGamerTileSmall,
+  kBkgnd,
+  kAwardedGamerTile,
+  kAwardedGamerTileSmall,
+  kGamerTileByImageId,
+  kPersonalGamerTile,
+  kPersonalGamerTileSmall,
+  kGamerTileByKey,
+  kAvatarGamerTile,
+  kAvatarGamerTileSmall,
+  kAvatarFullBody
+};
+
+// TODO: find filenames of other tile types that are stored in profile
+static const std::map<XTileType, wchar_t*> kTileFileNames = {
+    {XTileType::kPersonalGamerTile, L"tile_64.png"},
+    {XTileType::kPersonalGamerTileSmall, L"tile_32.png"},
+    {XTileType::kAvatarGamerTile, L"avtr_64.png"},
+    {XTileType::kAvatarGamerTileSmall, L"avtr_32.png"},
+};
+
 // from https://github.com/xemio/testdev/blob/master/xkelib/xam/_xamext.h
 #pragma pack(push, 4)
 struct X_XAMACCOUNTINFO {
@@ -343,6 +371,7 @@ class UserProfile {
   uint64_t xuid_offline() const { return xuid_; }
   uint64_t xuid_online() const { return account_.xuid_online; }
   std::string name() const { return to_utf8(account_.GetGamertagString()); }
+  std::filesystem::path profile_dir() { return ProfileDir(); }
   uint32_t signin_state() const { return 2; }
   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
 
