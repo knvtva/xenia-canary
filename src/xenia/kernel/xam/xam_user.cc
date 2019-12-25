@@ -517,6 +517,8 @@ dword_result_t XamUserWriteProfileSettings_entry(
     };
   }
 
+  user_profile->UpdateAllGpds();
+
   if (overlapped) {
     kernel_state()->CompleteOverlappedImmediate(overlapped, X_ERROR_SUCCESS);
     return X_ERROR_IO_PENDING;
@@ -939,6 +941,13 @@ DECLARE_XAM_EXPORT1(XamUserGetSubscriptionType, kUserProfiles, kStub);
 dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
     dword_t user_index, dword_t xuid, dword_t flags, dword_t offset,
     dword_t games_count, lpdword_t buffer_size_ptr, lpdword_t handle_ptr) {
+  // + 128 bytes for the 64-char titlename
+  const uint32_t kEntrySize = sizeof(xdbf::X_XDBF_GPD_TITLEPLAYED) + 128;
+
+  if (buffer_size_ptr) {
+    *buffer_size_ptr = kEntrySize * games_count;
+  }
+
   std::vector<xdbf::TitlePlayed> titles;
   kernel_state()->user_profile(user_index)->GetDashboardGpd()->GetTitles(&titles);
 
@@ -948,6 +957,10 @@ dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
   *handle_ptr = e->handle();
 
   for (auto title : titles) {
+    if (e->item_count() >= games_count) {
+      break;
+    }
+
     // For some reason dashboard gpd stores info about itself
     if (title.title_id == kDashboardID)
         continue;
@@ -973,6 +986,9 @@ dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
     xe::copy_and_swap<wchar_t>((wchar_t*)details->title_name, converted.data(),
                                converted.size() * sizeof(wchar_t));
   }
+
+  XELOGD("XamUserCreateTitlesPlayedEnumerator: added %d items to enumerator",
+         e->item_count());
 
   return X_ERROR_SUCCESS;
 }

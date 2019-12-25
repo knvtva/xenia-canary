@@ -604,6 +604,12 @@ dword_result_t XamFree_entry(lpdword_t ptr) {
 }
 DECLARE_XAM_EXPORT1(XamFree, kMemory, kImplemented);
 
+dword_result_t XamGetPrivateEnumStructureFromHandle_entry(unknown_t unk1,
+                                                    unknown_t unk2) {
+  return X_ERROR_INVALID_PARAMETER;
+}
+DECLARE_XAM_EXPORT1(XamGetPrivateEnumStructureFromHandle, kNone, kStub);
+
 dword_result_t XamQueryLiveHiveW_entry(lpu16string_t name, lpvoid_t out_buf,
                                        dword_t out_size,
                                        dword_t type /* guess */) {
