@@ -380,6 +380,17 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         xe::be<uint32_t> xmp_client;
         xe::be<uint32_t> storage_ptr;
       }* args = memory_->TranslateVirtual<decltype(args)>(buffer_ptr);
+
+      if (!buffer) {
+        return X_E_INVALIDARG;
+      }
+
+      if (!args->storage_ptr) {
+        // dash seems to call this with empty storage_ptr, XAM returns this
+        // error:
+        return X_E_INVALIDARG;
+      }
+      
       static_assert_size(decltype(*args), 8);
 
       uint32_t playlist_handle = xe::load_and_swap<uint32_t>(
