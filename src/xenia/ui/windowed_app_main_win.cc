@@ -157,7 +157,7 @@ const char* HostExceptionReport::GetFormattedAddress(uintptr_t address) {
       address - g_xenia_exe_base < g_xenia_exe_size) {
     uintptr_t offset = address - g_xenia_exe_base;
 
-    sprintf_s(current_buffer, "xenia_canary.exe+%llX", offset);
+    sprintf_s(current_buffer, "xenia_burnout5.exe+%llX", offset);
   } else {
     sprintf_s(current_buffer, "0x%llX", address);
   }
