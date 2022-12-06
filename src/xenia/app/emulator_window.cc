@@ -1123,7 +1123,7 @@ void EmulatorWindow::FillRecentlyLaunchedTitlesMenu(
 }
 
 void EmulatorWindow::ReadRecentlyLaunchedTitles() {
-  std::ifstream file("recent.toml");
+  std::ifstream file(emulator()->storage_root() / "recent.toml");
   if (!file.is_open()) {
     return;
   }
@@ -1184,7 +1184,8 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
   toml_table->end();
 
   // Open and write serialized data.
-  std::ofstream file("recent.toml", std::ofstream::trunc);
+  std::ofstream file(emulator()->storage_root() / "recent.toml",
+                     std::ofstream::trunc);
   file << *toml_table;
   file.close();
 }
