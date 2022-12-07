@@ -12,6 +12,21 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
 
+#ifdef XE_PLATFORM_WIN32
+// NOTE: must be included last as it expects windows.h to already be included.
+#define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
+#include <winsock2.h>                    // NOLINT(build/include_order)
+#elif XE_PLATFORM_LINUX
+#include <netinet/in.h>
+#endif
+
+struct XONLINE_SERVICE_INFO {
+  xe::be<uint32_t> id;
+  in_addr ip;
+  xe::be<uint16_t> port;
+  xe::be<uint16_t> unk;
+};
+
 namespace xe {
 namespace kernel {
 namespace xam {
@@ -22,22 +37,21 @@ XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state)
 
 // http://mb.mirage.org/bugzilla/xliveless/main.c
 
-X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
-                                            uint32_t buffer_ptr,
-                                            uint32_t buffer_length) {
-  // NOTE: buffer_length may be zero or valid.
-  auto buffer = memory_->TranslateVirtual(buffer_ptr);
+X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t arg1,
+                                            uint32_t arg2) {
   switch (message) {
     case 0x00058004: {
       // Called on startup, seems to just return a bool in the buffer.
-      assert_true(!buffer_length || buffer_length == 4);
-      XELOGD("XLiveBaseGetLogonId({:08X})", buffer_ptr);
+      assert_true(!arg2 || arg2 == 4);
+      auto buffer = memory_->TranslateVirtual(arg1);
+      XELOGD("XLiveBaseGetLogonId({:08X})", arg1);
       xe::store_and_swap<uint32_t>(buffer + 0, 1);  // ?
       return X_E_SUCCESS;
     }
     case 0x00058006: {
-      assert_true(!buffer_length || buffer_length == 4);
-      XELOGD("XLiveBaseGetNatType({:08X})", buffer_ptr);
+      assert_true(!arg2 || arg2 == 4);
+      auto buffer = memory_->TranslateVirtual(arg1);
+      XELOGD("XLiveBaseGetNatType({:08X})", arg1);
       xe::store_and_swap<uint32_t>(buffer + 0, 1);  // XONLINE_NAT_OPEN
       return X_E_SUCCESS;
     }
@@ -45,39 +59,44 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
       // Occurs if title calls XOnlineGetServiceInfo, expects dwServiceId
       // and pServiceInfo. pServiceInfo should contain pointer to
       // XONLINE_SERVICE_INFO structure.
-      XELOGD("CXLiveLogon::GetServiceInfo({:08X}, {:08X})", buffer_ptr,
-             buffer_length);
-      return 0x80151802;  // ERROR_CONNECTION_INVALID
+      XELOGD("CXLiveLogon::GetServiceInfo({:08X}, {:08X})", arg1, arg2);
+
+      XONLINE_SERVICE_INFO* service_info =
+          reinterpret_cast<XONLINE_SERVICE_INFO*>(
+              memory_->TranslateVirtual(arg2));
+      memset(service_info, 0, sizeof(XONLINE_SERVICE_INFO));
+      service_info->id = arg1;
+      service_info->ip.s_addr = htonl(INADDR_LOOPBACK);
+      return X_ERROR_SUCCESS;
     }
     case 0x00058020: {
       // 0x00058004 is called right before this.
       // We should create a XamEnumerate-able empty list here, but I'm not
       // sure of the format.
       // buffer_length seems to be the same ptr sent to 0x00058004.
-      XELOGD("CXLiveFriends::Enumerate({:08X}, {:08X}) unimplemented",
-             buffer_ptr, buffer_length);
+      XELOGD("CXLiveFriends::Enumerate({:08X}, {:08X}) unimplemented", arg1,
+             arg2);
       return X_E_FAIL;
     }
     case 0x00058023: {
       XELOGD(
           "CXLiveMessaging::XMessageGameInviteGetAcceptedInfo({:08X}, {:08X}) "
           "unimplemented",
-          buffer_ptr, buffer_length);
+          arg1, arg2);
       return X_E_FAIL;
     }
     case 0x00058046: {
       // Required to be successful for 4D530910 to detect signed-in profile
       // Doesn't seem to set anything in the given buffer, probably only takes
       // input
-      XELOGD("XLiveBaseUnk58046({:08X}, {:08X}) unimplemented", buffer_ptr,
-             buffer_length);
+      XELOGD("XLiveBaseUnk58046({:08X}, {:08X}) unimplemented", arg1, arg2);
       return X_E_SUCCESS;
     }
   }
   XELOGE(
       "Unimplemented XLIVEBASE message app={:08X}, msg={:08X}, arg1={:08X}, "
       "arg2={:08X}",
-      app_id(), message, buffer_ptr, buffer_length);
+      app_id(), message, arg1, arg2);
   return X_E_FAIL;
 }
 

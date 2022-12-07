@@ -519,7 +519,7 @@ dword_result_t XamUserWriteProfileSettings_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserWriteProfileSettings, kUserProfiles, kImplemented);
 
-dword_result_t XamUserCheckPrivilege_entry(dword_t user_index, dword_t mask,
+dword_result_t XamUserCheckPrivilege_entry(dword_t user_index, dword_t type,
                                            lpdword_t out_value) {
   // checking all users?
   if (user_index != 0xFF) {
@@ -534,6 +534,13 @@ dword_result_t XamUserCheckPrivilege_entry(dword_t user_index, dword_t mask,
 
   // If we deny everything, games should hopefully not try to do stuff.
   *out_value = 0;
+
+  const auto& user_profile = kernel_state()->user_profile(user_index);
+  if (user_profile->signin_state() == 2 && type == 254) {
+    // We have enabled Live so let's allow multiplayer
+    *out_value = 1;
+  }
+
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserCheckPrivilege, kUserProfiles, kStub);
