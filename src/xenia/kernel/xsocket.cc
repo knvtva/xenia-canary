@@ -33,6 +33,9 @@
 namespace xe {
 namespace kernel {
 
+static_assert_size(N_XSOCKADDR, sizeof(sockaddr));
+static_assert_size(N_XSOCKADDR_IN, sizeof(sockaddr_in));
+
 XSocket::XSocket(KernelState* kernel_state)
     : XObject(kernel_state, kObjectType) {}
 
@@ -120,8 +123,8 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 #endif
 }
 
-X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
-  int ret = connect(native_handle_, (sockaddr*)name, name_len);
+X_STATUS XSocket::Connect(const N_XSOCKADDR* name, int name_len) {
+  int ret = connect(native_handle_, (const sockaddr*)name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -129,8 +132,8 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
   return X_STATUS_SUCCESS;
 }
 
-X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
-  int ret = bind(native_handle_, (sockaddr*)name, name_len);
+X_STATUS XSocket::Bind(const N_XSOCKADDR_IN* name, int name_len) {
+  int ret = bind(native_handle_, (const sockaddr*)name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -267,7 +270,19 @@ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,
   return true;
 }
 
-X_STATUS XSocket::GetSockName(uint8_t* buf, int* buf_len) {
+X_STATUS XSocket::GetPeerName(N_XSOCKADDR* buf, int* buf_len) {
+  struct sockaddr sa = {};
+
+  int ret = getpeername(native_handle_, &sa, (socklen_t*)buf_len);
+  if (ret < 0) {
+    return X_STATUS_UNSUCCESSFUL;
+  }
+
+  std::memcpy(buf, &sa, *buf_len);
+  return X_STATUS_SUCCESS;
+}
+
+X_STATUS XSocket::GetSockName(N_XSOCKADDR* buf, int* buf_len) {
   struct sockaddr sa = {};
 
   int ret = getsockname(native_handle_, &sa, (socklen_t*)buf_len);

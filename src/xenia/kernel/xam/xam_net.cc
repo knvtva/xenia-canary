@@ -1047,8 +1047,14 @@ void NetDll_WSASetLastError_entry(dword_t error_code) {
 }
 DECLARE_XAM_EXPORT1(NetDll_WSASetLastError, kNetworking, kImplemented);
 
-dword_result_t NetDll_getsockname_entry(dword_t caller, dword_t socket_handle,
-                                        lpvoid_t buf_ptr, lpdword_t len_ptr) {
+dword_result_t NetDll_getpeername_entry(dword_t caller, dword_t socket_handle,
+                                        pointer_t<XSOCKADDR> addr_ptr,
+                                        lpdword_t addrlen_ptr) {
+  if (!addr_ptr) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAEFAULT));
+    return -1;
+  }
+
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -1056,15 +1062,47 @@ dword_result_t NetDll_getsockname_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  int buffer_len = *len_ptr;
-
-  X_STATUS status = socket->GetSockName(buf_ptr, &buffer_len);
+  N_XSOCKADDR native_addr(addr_ptr);
+  int native_len = *addrlen_ptr;
+  X_STATUS status = socket->GetPeerName(&native_addr, &native_len);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
 
-  *len_ptr = buffer_len;
+  addr_ptr->address_family = native_addr.address_family;
+  std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
+  *addrlen_ptr = native_len;
+  return 0;
+}
+DECLARE_XAM_EXPORT1(NetDll_getpeername, kNetworking, kImplemented);
+
+dword_result_t NetDll_getsockname_entry(dword_t caller, dword_t socket_handle,
+                                        pointer_t<XSOCKADDR> addr_ptr,
+                                        lpdword_t addrlen_ptr) {
+  if (!addr_ptr) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAEFAULT));
+    return -1;
+  }
+
+  auto socket =
+      kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    return -1;
+  }
+
+  N_XSOCKADDR native_addr(addr_ptr);
+  int native_len = *addrlen_ptr;
+  X_STATUS status = socket->GetSockName(&native_addr, &native_len);
+  if (XFAILED(status)) {
+    XThread::SetLastError(socket->GetLastWSAError());
+    return -1;
+  }
+
+  addr_ptr->address_family = native_addr.address_family;
+  std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
+  *addrlen_ptr = native_len;
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_getsockname, kNetworking, kImplemented);

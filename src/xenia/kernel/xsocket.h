@@ -113,10 +113,11 @@ class XSocket : public XObject {
                      uint32_t optlen);
   X_STATUS IOControl(uint32_t cmd, uint8_t* arg_ptr);
 
-  X_STATUS Connect(N_XSOCKADDR* name, int name_len);
-  X_STATUS Bind(N_XSOCKADDR_IN* name, int name_len);
+  X_STATUS Connect(const N_XSOCKADDR* name, int name_len);
+  X_STATUS Bind(const N_XSOCKADDR_IN* name, int name_len);
   X_STATUS Listen(int backlog);
-  X_STATUS GetSockName(uint8_t* buf, int* buf_len);
+  X_STATUS GetPeerName(N_XSOCKADDR* name, int* name_len);
+  X_STATUS GetSockName(N_XSOCKADDR* buf, int* buf_len);
   object_ref<XSocket> Accept(N_XSOCKADDR* name, int* name_len);
   int Shutdown(int how);
 
