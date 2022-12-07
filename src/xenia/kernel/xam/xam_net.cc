@@ -97,24 +97,6 @@ struct X_WSADATA {
   xe::be<uint32_t> vendor_info_ptr;
 };
 
-struct XWSABUF {
-  xe::be<uint32_t> len;
-  xe::be<uint32_t> buf_ptr;
-};
-
-struct XWSAOVERLAPPED {
-  xe::be<uint32_t> internal;
-  xe::be<uint32_t> internal_high;
-  union {
-    struct {
-      xe::be<uint32_t> low;
-      xe::be<uint32_t> high;
-    } offset;  // must be named to avoid GCC error
-    xe::be<uint32_t> pointer;
-  };
-  xe::be<uint32_t> event_handle;
-};
-
 void LoadSockaddr(const uint8_t* ptr, sockaddr* out_addr) {
   out_addr->sa_family = xe::load_and_swap<uint16_t>(ptr + 0);
   switch (out_addr->sa_family) {
@@ -297,24 +279,48 @@ dword_result_t NetDll_WSAGetLastError_entry() {
 DECLARE_XAM_EXPORT1(NetDll_WSAGetLastError, kNetworking, kImplemented);
 
 dword_result_t NetDll_WSARecvFrom_entry(
-    dword_t caller, dword_t socket, pointer_t<XWSABUF> buffers_ptr,
-    dword_t buffer_count, lpdword_t num_bytes_recv, lpdword_t flags_ptr,
-    pointer_t<XSOCKADDR> from_addr, pointer_t<XWSAOVERLAPPED> overlapped_ptr,
-    lpvoid_t completion_routine_ptr) {
-  if (overlapped_ptr) {
-    // auto evt = kernel_state()->object_table()->LookupObject<XEvent>(
-    //    overlapped_ptr->event_handle);
-
-    // if (evt) {
-    //  //evt->Set(0, false);
-    //}
+    dword_t caller, dword_t socket_handle, pointer_t<XWSABUF> buffers,
+    dword_t num_buffers, lpdword_t num_bytes_recv_ptr, lpdword_t flags_ptr,
+    pointer_t<XSOCKADDR> from_ptr, lpdword_t fromlen_ptr,
+    pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpvoid_t completion_routine_ptr) {
+  auto socket =
+      kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    return -1;
   }
 
-  // we're not going to be receiving packets any time soon
-  // return error so we don't wait on that - Cancerous
-  return -1;
+  int ret =
+      socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr, flags_ptr,
+                          from_ptr, fromlen_ptr, overlapped_ptr);
+  if (ret < 0) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+
+  return ret;
 }
-DECLARE_XAM_EXPORT2(NetDll_WSARecvFrom, kNetworking, kStub, kHighFrequency);
+DECLARE_XAM_EXPORT2(NetDll_WSARecvFrom, kNetworking, kImplemented,
+                    kHighFrequency);
+
+dword_result_t NetDll_WSAGetOverlappedResult_entry(
+    dword_t caller, dword_t socket_handle,
+    pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpdword_t bytes_transferred,
+    dword_t wait, lpdword_t flags_ptr) {
+  auto socket =
+      kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    return 0;
+  }
+
+  bool ret = socket->WSAGetOverlappedResult(overlapped_ptr, bytes_transferred,
+                                            wait, flags_ptr);
+  if (!ret) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+  return ret;
+}
+DECLARE_XAM_EXPORT1(NetDll_WSAGetOverlappedResult, kNetworking, kImplemented);
 
 // If the socket is a VDP socket, buffer 0 is the game data length, and buffer 1
 // is the unencrypted game data.
