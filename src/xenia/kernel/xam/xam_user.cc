@@ -46,13 +46,13 @@ dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
 
     X_PROFILEENUMRESULT* profile = (X_PROFILEENUMRESULT*)e->AppendItem();
     memset(profile, 0, sizeof(X_PROFILEENUMRESULT));
-    profile->xuid_offline = user_profile->xuid();
+    profile->xuid_offline = user_profile->xuid_offline();
     profile->device_id = 0xF00D0000;
 
     auto tag = to_utf16(user_profile->name());
     xe::copy_and_swap<char16_t>(profile->account.gamertag, tag.c_str(),
                                 tag.length());
-    profile->account.xuid_online = user_profile->xuid();
+    profile->account.xuid_online = user_profile->xuid_online();
   }
 
   *handle_out = e->handle();
@@ -96,8 +96,7 @@ DECLARE_XAM_EXPORT1(XamProfileEnumerate, kUserProfiles, kImplemented);
 
 X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
                                         lpqword_t xuid_ptr) {
-  assert_true(type_mask == 1 || type_mask == 2 || type_mask == 3 ||
-              type_mask == 4 || type_mask == 7);
+  assert_true(type_mask >= 1 && type_mask <= 7);
   if (!xuid_ptr) {
     return X_E_INVALIDARG;
   }
@@ -107,13 +106,13 @@ X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
     if (kernel_state()->IsUserSignedIn(user_index)) {
       const auto& user_profile = kernel_state()->user_profile(user_index);
       auto type = user_profile->type() & type_mask;
-      if (type & (2 | 4)) {
+      if (type & 2 && user_profile->signin_state() == 2) {
         // maybe online profile?
-        xuid = user_profile->xuid();
+        xuid = user_profile->xuid_online();
         result = X_E_SUCCESS;
-      } else if (type & 1) {
+      } else if (type & (1 | 4)) {
         // maybe offline profile?
-        xuid = user_profile->xuid();
+        xuid = user_profile->xuid_offline();
         result = X_E_SUCCESS;
       }
     }
@@ -142,17 +141,17 @@ DECLARE_XAM_EXPORT2(XamUserGetSigninState, kUserProfiles, kImplemented,
 
 typedef struct {
   xe::be<uint64_t> xuid;
-  xe::be<uint32_t> unk08;  // maybe zero?
+  xe::be<uint32_t> flags;  // bit 0 = live enabled, bit 1 = guest
   xe::be<uint32_t> signin_state;
-  xe::be<uint32_t> unk10;  // ?
-  xe::be<uint32_t> unk14;  // ?
+  xe::be<uint32_t> guest_number;
+  xe::be<uint32_t> guest_parent_index;
   char name[16];
 } X_USER_SIGNIN_INFO;
 static_assert_size(X_USER_SIGNIN_INFO, 40);
 
 X_HRESULT_result_t XamUserGetSigninInfo_entry(
     dword_t user_index, dword_t flags, pointer_t<X_USER_SIGNIN_INFO> info) {
-  if (!info) {
+  if (!info || flags < 0 || flags > 2) {
     return X_E_INVALIDARG;
   }
 
@@ -165,8 +164,25 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
 
   if (kernel_state()->IsUserSignedIn(user_index)) {
     const auto& user_profile = kernel_state()->user_profile(user_index);
-    info->xuid = user_profile->xuid();
+    if (flags & 1) {
+      if (user_profile->type() & 1) {
+        info->xuid = user_profile->xuid_offline();
+      } else {
+        info->xuid = 0;
+      }
+    } else if (user_profile->type() & 2) {
+      info->xuid = user_profile->xuid_online();
+    } else {
+      info->xuid = (flags == 0) ? user_profile->xuid_offline() : 0;
+    }
+
     info->signin_state = user_profile->signin_state();
+
+    uint32_t flags = 0;
+    if (info->signin_state == 2) flags &= 1;
+    if (user_profile->type() & 4) flags &= 2;
+    info->flags = flags;
+
     xe::string_util::copy_truncating(info->name, user_profile->name(),
                                      xe::countof(info->name));
   } else {
@@ -242,7 +258,8 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
     xuid_count = 1;
     if (kernel_state()->IsUserSignedIn(user_index)) {
       const auto& user_profile = kernel_state()->user_profile(user_index);
-      assert_true(static_cast<uint64_t>(xuids[0]) == user_profile->xuid());
+      assert_true(static_cast<uint64_t>(xuids[0]) ==
+                  user_profile->xuid_online());
     }
   }
   assert_zero(unk);  // probably flags
@@ -308,7 +325,7 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
 
   if (xuids) {
     uint64_t user_xuid = static_cast<uint64_t>(xuids[0]);
-    if (!kernel_state()->IsUserSignedIn(user_xuid)) {
+    if (!kernel_state()->IsUserSignedIn(user_xuid, true)) {
       if (overlapped) {
         kernel_state()->CompleteOverlappedImmediate(
             kernel_state()->memory()->HostToGuestVirtual(overlapped),
@@ -317,7 +334,7 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
       }
       return X_ERROR_NO_SUCH_USER;
     }
-    user_profile = kernel_state()->user_profile(user_xuid);
+    user_profile = kernel_state()->user_profile(user_xuid, true);
   }
 
   // First call asks for size (fill buffer_size_ptr).
@@ -366,7 +383,7 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
                         : setting->is_title_specific() ? 2
                                                        : 1;
     if (xuids) {
-      out_setting->xuid = user_profile->xuid();
+      out_setting->xuid = user_profile->xuid_offline();
     } else {
       out_setting->xuid = -1;
       out_setting->user_index = static_cast<uint32_t>(user_index);

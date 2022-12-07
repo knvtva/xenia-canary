@@ -337,7 +337,8 @@ class UserProfile {
 
   UserProfile(uint8_t index, const std::filesystem::path& profiles_root);
 
-  uint64_t xuid() const { return account_.xuid_online; }
+  uint64_t xuid_offline() const { return xuid_; }
+  uint64_t xuid_online() const { return account_.xuid_online; }
   std::string name() const { return to_utf8(account_.GetGamertagString()); }
   uint32_t signin_state() const { return 1; }
   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
@@ -360,6 +361,7 @@ class UserProfile {
   void LoadProfile();
   bool UpdateGpd(uint32_t title_id, xdbf::GpdFile& gpd_data);
 
+  uint64_t xuid_;
   X_XAMACCOUNTINFO account_;
   std::vector<std::unique_ptr<Setting>> setting_list_;
   std::unordered_map<uint32_t, Setting*> settings_;

@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include <random>
 #include <sstream>
 
 #include "third_party/fmt/include/fmt/format.h"
@@ -117,11 +118,15 @@ UserProfile::UserProfile(uint8_t index,
       cvars::user_2_xuid,
       cvars::user_3_xuid,
   };
-  uint64_t xuid = xuid_settings[index];
-  if (xuid == 0) xuid = 0xB13EBABEBABEBABE + index;
-  account_.xuid_online = xuid;
+  xuid_ = xuid_settings[index];
+  if (xuid_ == 0) xuid_ = 0xB13EBABEBABEBABE + index;
 
-  auto default_user_name = "XeniaUser" + std::to_string(index);
+  std::random_device r;
+  std::uniform_int_distribution<uint64_t> dist(0, 0xFFFFFFFFFF);
+  account_.xuid_online = 0x0009BA0000000000 + dist(r);
+
+  auto default_user_name =
+      "XeniaUser" + std::to_string(account_.xuid_online & 0xFFFF);
   std::copy(default_user_name.begin(), default_user_name.end(),
             account_.gamertag);
 
@@ -195,7 +200,7 @@ UserProfile::UserProfile(uint8_t index,
 }
 
 std::filesystem::path UserProfile::ProfileDir() {
-  auto id = fmt::format("{:08X}", xuid());
+  auto id = fmt::format("{:08X}", xuid_offline());
   return profiles_root_ / id;
 }
 
