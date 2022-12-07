@@ -687,7 +687,12 @@ dword_result_t NetDll_setsockopt_entry(dword_t caller, dword_t socket_handle,
   }
 
   X_STATUS status = socket->SetOption(level, optname, optval_ptr, optlen);
-  return XSUCCEEDED(status) ? 0 : -1;
+  if (XFAILED(status)) {
+    XThread::SetLastError(socket->GetLastWSAError());
+    return -1;
+  }
+
+  return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_setsockopt, kNetworking, kImplemented);
 
@@ -703,7 +708,12 @@ dword_result_t NetDll_getsockopt_entry(dword_t caller, dword_t socket_handle,
 
   int native_len = *optlen;
   X_STATUS status = socket->GetOption(level, optname, optval_ptr, &native_len);
-  return XSUCCEEDED(status) ? 0 : -1;
+  if (XFAILED(status)) {
+    XThread::SetLastError(socket->GetLastWSAError());
+    return -1;
+  }
+
+  return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_getsockopt, kNetworking, kImplemented);
 
@@ -813,6 +823,7 @@ dword_result_t NetDll_accept_entry(dword_t caller, dword_t socket_handle,
 
     return new_socket->handle();
   } else {
+    XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
 }
@@ -935,7 +946,11 @@ dword_result_t NetDll_recv_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  return socket->Recv(buf_ptr, buf_len, flags);
+  int ret = socket->Recv(buf_ptr, buf_len, flags);
+  if (ret < 0) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+  return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_recv, kNetworking, kImplemented);
 
@@ -987,7 +1002,11 @@ dword_result_t NetDll_send_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  return socket->Send(buf_ptr, buf_len, flags);
+  int ret = socket->Send(buf_ptr, buf_len, flags);
+  if (ret < 0) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+  return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_send, kNetworking, kImplemented);
 
@@ -1004,7 +1023,11 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
   }
 
   N_XSOCKADDR_IN native_to(to_ptr);
-  return socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+  int ret = socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+  if (ret < 0) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+  return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_sendto, kNetworking, kImplemented);
 
