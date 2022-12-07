@@ -24,8 +24,10 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
-DEFINE_path(profile_directory, "Content\\Profile\\",
-            "The directory to store profile data inside", "Storage");
+DEFINE_uint64(user_0_xuid, 0, "XUID for user 0", "User");
+DEFINE_uint64(user_1_xuid, 0, "XUID for user 1", "User");
+DEFINE_uint64(user_2_xuid, 0, "XUID for user 2", "User");
+DEFINE_uint64(user_3_xuid, 0, "XUID for user 3", "User");
 
 constexpr uint32_t kDashboardID = 0xFFFE07D1;
 
@@ -101,15 +103,25 @@ void UserProfile::EncryptAccountFile(const X_XAMACCOUNTINFO* input,
             enc_data_size);
 }
 
-UserProfile::UserProfile(uint8_t index) : dash_gpd_(kDashboardID) {
+UserProfile::UserProfile(uint8_t index,
+                         const std::filesystem::path& profiles_root)
+    : dash_gpd_(kDashboardID), profiles_root_(profiles_root) {
+  std::memset(&account_, 0, sizeof(account_));
+
   // 58410A1F checks the user XUID against a mask of 0x00C0000000000000
   // (3<<54), if non-zero, it prevents the user from playing the game. "You do
   // not have permissions to perform this operation."
-  account_.xuid_online = 0xB13EBABEBABEBABE + index;
+  uint64_t xuid_settings[4] = {
+      cvars::user_0_xuid,
+      cvars::user_1_xuid,
+      cvars::user_2_xuid,
+      cvars::user_3_xuid,
+  };
+  uint64_t xuid = xuid_settings[index];
+  if (xuid == 0) xuid = 0xB13EBABEBABEBABE + index;
+  account_.xuid_online = xuid;
 
-  // TODO: How to deal with this nullterm?
-  auto default_user_name = "XeniaUser" + std::to_string(index) + "\0\0";
-
+  auto default_user_name = "XeniaUser" + std::to_string(index);
   std::copy(default_user_name.begin(), default_user_name.end(),
             account_.gamertag);
 
@@ -182,12 +194,22 @@ UserProfile::UserProfile(uint8_t index) : dash_gpd_(kDashboardID) {
   LoadProfile();
 }
 
+std::filesystem::path UserProfile::ProfileDir() {
+  auto id = fmt::format("{:08X}", xuid());
+  return profiles_root_ / id;
+}
+
 void UserProfile::LoadProfile() {
-  auto mmap_ = MappedMemory::Open(cvars::profile_directory / L"Account",
-                                  MappedMemory::Mode::kRead);
+  auto profile_dir = ProfileDir();
+  if (!std::filesystem::exists(profile_dir)) {
+    std::filesystem::create_directories(profile_dir);
+  }
+
+  auto account_file = profile_dir / L"Account";
+  auto mmap_ = MappedMemory::Open(account_file, MappedMemory::Mode::kRead);
   if (mmap_) {
-    XELOGI("Loading Account file from path {}Account",
-           cvars::profile_directory.generic_u8string());
+    XELOGI("Loading Account file from path {}",
+           account_file.generic_u8string());
 
     X_XAMACCOUNTINFO tmp_acct;
     bool success = DecryptAccountFile(mmap_->data(), &tmp_acct);
@@ -196,20 +218,28 @@ void UserProfile::LoadProfile() {
     }
 
     if (!success) {
-      XELOGW("Failed to decrypt Account file data");
+      FatalError(
+          "Failed to decrypt Account file data. File is likely corrupt.");
     } else {
       std::memcpy(&account_, &tmp_acct, sizeof(X_XAMACCOUNTINFO));
       XELOGI("Loaded Account \"{}\" successfully!", name());
     }
 
     mmap_->Close();
+  } else {
+    XELOGI("Generating new Account file at path {}",
+           account_file.generic_u8string());
+
+    filesystem::CreateEmptyFile(account_file);
+    mmap_ = MappedMemory::Open(account_file, MappedMemory::Mode::kReadWrite, 0,
+                               sizeof(X_XAMACCOUNTINFO) + 0x18);
+    EncryptAccountFile(&account_, mmap_->data());
+    mmap_->Close(sizeof(X_XAMACCOUNTINFO) + 0x18);
   }
 
-  XELOGI("Loading profile GPDs from path {}",
-         cvars::profile_directory.generic_u8string());
-
-  mmap_ = MappedMemory::Open(cvars::profile_directory / L"FFFE07D1.gpd",
-                             MappedMemory::Mode::kRead);
+  auto gpd_path = profile_dir / L"FFFE07D1.gpd";
+  XELOGI("Loading profile GPDs from path {}", gpd_path.generic_u8string());
+  mmap_ = MappedMemory::Open(gpd_path, MappedMemory::Mode::kRead);
   if (!mmap_) {
     XELOGW(
         "Failed to open dash GPD (FFFE07D1.gpd) for reading, using blank one");
@@ -225,8 +255,7 @@ void UserProfile::LoadProfile() {
   for (auto title : titles) {
     wchar_t fname[256];
     _swprintf(fname, L"%X.gpd", title.title_id);
-    mmap_ = MappedMemory::Open(cvars::profile_directory / fname,
-                               MappedMemory::Mode::kRead);
+    mmap_ = MappedMemory::Open(profile_dir / fname, MappedMemory::Mode::kRead);
     if (!mmap_) {
       XELOGE("Failed to open GPD for title {:08X} ({})!", title.title_id,
              to_utf8(title.title_name));
@@ -246,7 +275,7 @@ void UserProfile::LoadProfile() {
     title_gpds_[title.title_id] = title_gpd;
   }
 
-  XELOGI("Loaded {:08X} profile GPDs", title_gpds_.size() + 1);
+  XELOGI("Loaded {} profile GPDs", title_gpds_.size() + 1);
 }
 
 xdbf::GpdFile* UserProfile::SetTitleSpaData(const xdbf::SpaFile* spa_data) {
@@ -452,17 +481,17 @@ bool UserProfile::UpdateGpd(uint32_t title_id, xdbf::GpdFile& gpd_data) {
     return false;
   }
 
-  if (!std::filesystem::exists(cvars::profile_directory)) {
-    std::filesystem::create_directories(cvars::profile_directory);
+  auto profile_dir = ProfileDir();
+  if (!std::filesystem::exists(profile_dir)) {
+    std::filesystem::create_directories(profile_dir);
   }
 
   wchar_t fname[256];
   _swprintf(fname, L"%X.gpd", title_id);
 
-  filesystem::CreateEmptyFile(cvars::profile_directory / fname);
-  auto mmap_ =
-      MappedMemory::Open(cvars::profile_directory / fname,
-                         MappedMemory::Mode::kReadWrite, 0, gpd_length);
+  filesystem::CreateEmptyFile(profile_dir / fname);
+  auto mmap_ = MappedMemory::Open(
+      profile_dir / fname, MappedMemory::Mode::kReadWrite, 0, gpd_length);
   if (!mmap_) {
     XELOGE("Failed to open {:08X}.gpd for writing!", title_id);
     return false;

@@ -87,6 +87,11 @@ DEFINE_path(
     "under the storage root, or, if available, the cache directory preferred "
     "for the OS, will be used.",
     "Storage");
+DEFINE_path(
+    profiles_root, "",
+    "Root path for profile data storage, or empty to use the profiles folder "
+    "under the storage root.",
+    "Storage");
 
 DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 DEFINE_bool(mount_cache, false, "Enable cache mount", "Storage");
@@ -435,14 +440,27 @@ bool EmulatorApp::OnInitialize() {
   cache_root = std::filesystem::absolute(cache_root);
   XELOGI("Cache root: {}", xe::path_to_utf8(cache_root));
 
+  std::filesystem::path profiles_root = cvars::profiles_root;
+  if (profiles_root.empty()) {
+    profiles_root = storage_root / "profiles";
+  } else {
+    // If profiles root isn't an absolute path, then it should be relative to
+    // the storage root.
+    if (!profiles_root.is_absolute()) {
+      profiles_root = storage_root / profiles_root;
+    }
+  }
+  profiles_root = std::filesystem::absolute(profiles_root);
+  XELOGI("Profiles root: {}", xe::path_to_utf8(profiles_root));
+
   if (cvars::discord) {
     discord::DiscordPresence::Initialize();
     discord::DiscordPresence::NotPlaying();
   }
 
   // Create the emulator but don't initialize so we can setup the window.
-  emulator_ =
-      std::make_unique<Emulator>("", storage_root, content_root, cache_root);
+  emulator_ = std::make_unique<Emulator>("", storage_root, content_root,
+                                         cache_root, profiles_root);
 
   // Main emulator display window.
   emulator_window_ = EmulatorWindow::Create(emulator_.get(), app_context());

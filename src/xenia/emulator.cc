@@ -85,7 +85,8 @@ Emulator::GameConfigLoadCallback::~GameConfigLoadCallback() {
 Emulator::Emulator(const std::filesystem::path& command_line,
                    const std::filesystem::path& storage_root,
                    const std::filesystem::path& content_root,
-                   const std::filesystem::path& cache_root)
+                   const std::filesystem::path& cache_root,
+                   const std::filesystem::path& profile_root)
     : on_launch(),
       on_terminate(),
       on_exit(),
@@ -93,6 +94,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
       storage_root_(storage_root),
       content_root_(content_root),
       cache_root_(cache_root),
+      profile_root_(profile_root),
       title_name_(),
       title_version_(),
       display_window_(nullptr),

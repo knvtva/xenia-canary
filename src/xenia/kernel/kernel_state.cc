@@ -52,7 +52,8 @@ KernelState::KernelState(Emulator* emulator)
   file_system_ = emulator->file_system();
 
   app_manager_ = std::make_unique<xam::AppManager>();
-  user_profiles_.emplace(0, std::make_unique<xam::UserProfile>(0));
+  user_profiles_.emplace(
+      0, std::make_unique<xam::UserProfile>(0, emulator->profile_root()));
 
   auto content_root = emulator_->content_root();
   if (!content_root.empty()) {
@@ -970,7 +971,8 @@ void KernelState::UpdateUsedUserProfiles() {
     }
 
     if (!IsUserSignedIn(i) && is_used) {
-      auto profile = std::make_unique<xam::UserProfile>(i);
+      auto profile =
+          std::make_unique<xam::UserProfile>(i, emulator_->profile_root());
       auto spa_file = emulator()->spa_file();
       if (spa_file) {
         profile->SetTitleSpaData(spa_file);

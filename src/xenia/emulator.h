@@ -90,7 +90,8 @@ class Emulator {
   explicit Emulator(const std::filesystem::path& command_line,
                     const std::filesystem::path& storage_root,
                     const std::filesystem::path& content_root,
-                    const std::filesystem::path& cache_root);
+                    const std::filesystem::path& cache_root,
+                    const std::filesystem::path& profiles_root);
   ~Emulator();
 
   // Full command line used when launching the process.
@@ -104,6 +105,9 @@ class Emulator {
 
   // Folder files safe to remove without significant side effects are stored in.
   const std::filesystem::path& cache_root() const { return cache_root_; }
+
+  // Folder profile data is stored in.
+  const std::filesystem::path& profile_root() const { return profile_root_; }
 
   // Name of the title in the default language.
   const std::string& title_name() const { return title_name_; }
@@ -238,6 +242,7 @@ const std::unique_ptr<vfs::Device> CreateVfsDeviceBasedOnPath(
   std::filesystem::path storage_root_;
   std::filesystem::path content_root_;
   std::filesystem::path cache_root_;
+  std::filesystem::path profile_root_;
 
   std::string title_name_;
   std::string title_version_;

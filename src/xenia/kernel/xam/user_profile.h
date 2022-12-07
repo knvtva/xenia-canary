@@ -335,7 +335,7 @@ class UserProfile {
   static void EncryptAccountFile(const X_XAMACCOUNTINFO* input, uint8_t* output,
                                  bool devkit = false);
 
-  UserProfile(uint8_t index);
+  UserProfile(uint8_t index, const std::filesystem::path& profiles_root);
 
   uint64_t xuid() const { return account_.xuid_online; }
   std::string name() const { return to_utf8(account_.GetGamertagString()); }
@@ -354,6 +354,9 @@ class UserProfile {
   bool UpdateAllGpds();
 
  private:
+  const std::filesystem::path& profiles_root_;
+
+  std::filesystem::path ProfileDir();
   void LoadProfile();
   bool UpdateGpd(uint32_t title_id, xdbf::GpdFile& gpd_data);
 
