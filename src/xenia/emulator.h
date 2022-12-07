@@ -156,6 +156,8 @@ class Emulator {
   // This is effectively the guest operating system.
   kernel::KernelState* kernel_state() const { return kernel_state_.get(); }
 
+  kernel::xam::xdbf::SpaFile* spa_file() const { return spa_.get(); }
+
   patcher::Patcher* patcher() const { return patcher_.get(); }
 
   // Initializes the emulator and configures all components.
@@ -255,6 +257,8 @@ const std::unique_ptr<vfs::Device> CreateVfsDeviceBasedOnPath(
   std::unique_ptr<patcher::Patcher> patcher_;
 
   std::unique_ptr<kernel::KernelState> kernel_state_;
+
+  std::unique_ptr<kernel::xam::xdbf::SpaFile> spa_;
 
   // Accessible only from the thread that invokes those callbacks (the UI thread
   // if the UI is available).

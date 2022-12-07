@@ -970,7 +970,12 @@ void KernelState::UpdateUsedUserProfiles() {
     }
 
     if (!IsUserSignedIn(i) && is_used) {
-      user_profiles_.emplace(i, std::make_unique<xam::UserProfile>(i));
+      auto profile = std::make_unique<xam::UserProfile>(i);
+      auto spa_file = emulator()->spa_file();
+      if (spa_file) {
+        profile->SetTitleSpaData(spa_file);
+      }
+      user_profiles_.emplace(i, std::move(profile));
       BroadcastNotification(0x12, 0);
     }
   }

@@ -36,8 +36,8 @@
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/user_module.h"
 #include "xenia/kernel/util/gameinfo_utils.h"
-#include "xenia/kernel/util/xdbf_utils.h"
 #include "xenia/kernel/xam/xam_module.h"
+#include "xenia/kernel/xam/xdbf/xdbf.h"
 #include "xenia/kernel/xbdm/xbdm_module.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_module.h"
 #include "xenia/memory.h"
@@ -867,21 +867,30 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
     uint32_t resource_data = 0;
     uint32_t resource_size = 0;
-    if (XSUCCEEDED(module->GetSection(title_id.c_str(), &resource_data,
-                                      &resource_size))) {
-      kernel::util::XdbfGameData db(
-          module->memory()->TranslateVirtual(resource_data), resource_size);
-      if (db.is_valid()) {
+
+    if (XSUCCEEDED(
+            module->GetSection(title_id, &resource_data, &resource_size))) {
+      spa_ = std::make_unique<kernel::xam::xdbf::SpaFile>();
+      if (spa_->Read(module->memory()->TranslateVirtual(resource_data),
+                     resource_size)) {
+        // Set title SPA and get title name/icon
+        for (uint32_t i = 0; i < 4; i++) {
+          if (kernel_state_->IsUserSignedIn(i)) {
+            kernel_state_->user_profile(i)->SetTitleSpaData(spa_file());
+          }
+        }
         // TODO(gibbed): get title respective to user locale.
-        title_name_ = db.title(XLanguage::kEnglish);
+        title_name_ = spa_->GetTitleName(XLanguage::kEnglish);
         if (title_name_.empty()) {
           // If English title is unavailable, get the title in default locale.
-          title_name_ = db.title();
+          title_name_ = spa_->GetTitleName();
         }
         XELOGI("Title name: {}", title_name_);
-        auto icon_block = db.icon();
+        auto icon_block = spa_->GetIcon();
+
         if (icon_block) {
-          display_window_->SetIcon(icon_block.buffer, icon_block.size);
+          display_window_->SetIcon(icon_block->data.data(),
+                                   icon_block->data.size());
         }
       }
     }
