@@ -126,14 +126,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
     case 0x000B0012: {
       assert_true(buffer_length == 0x14);
       uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t user_count = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t unk_0 = xe::load_and_swap<uint32_t>(buffer + 0x8);
+      uint32_t array_count = xe::load_and_swap<uint32_t>(buffer + 0x4);
+      uint32_t xuid_array = xe::load_and_swap<uint32_t>(buffer + 0x8);
       uint32_t user_index_array = xe::load_and_swap<uint32_t>(buffer + 0xC);
       uint32_t private_slots_array = xe::load_and_swap<uint32_t>(buffer + 0x10);
 
-      assert_zero(unk_0);
-      XELOGD("XGISessionJoinLocal({:08X}, {}, {}, {:08X}, {:08X})", session_ptr,
-             user_count, unk_0, user_index_array, private_slots_array);
+      // Local uses user indices, remote uses XUIDs
+      if (xuid_array == 0) {
+        XELOGD("XGISessionJoinLocal({:08X}, {}, {}, {:08X}, {:08X})",
+               session_ptr, array_count, xuid_array, user_index_array,
+               private_slots_array);
+      } else {
+        XELOGD("XGISessionJoinRemote({:08X}, {}, {}, {:08X}, {:08X})",
+               session_ptr, array_count, xuid_array, user_index_array,
+               private_slots_array);
+      }
       return X_E_SUCCESS;
     }
     case 0x000B0014: {
