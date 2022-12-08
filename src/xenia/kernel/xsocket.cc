@@ -213,7 +213,7 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
                      flags, (sockaddr*)&nfrom, &nfromlen);
   if (from) {
     from->sin_family = nfrom.sin_family;
-    from->sin_addr = ntohl(nfrom.sin_addr.s_addr);  // BE <- BE
+    from->sin_addr = nfrom.sin_addr.s_addr;
     from->sin_port = nfrom.sin_port;
     std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
   }

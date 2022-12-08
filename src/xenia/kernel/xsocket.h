@@ -51,8 +51,8 @@ struct XSOCKADDR_IN {
   xe::be<uint16_t> sin_family;
 
   // Always big-endian!
-  xe::be<uint16_t> sin_port;
-  xe::be<uint32_t> sin_addr;
+  uint16_t sin_port;
+  uint32_t sin_addr;
   // sin_zero is defined as __pad on Android, so prefixed here.
   char x_sin_zero[8];
 };
@@ -71,8 +71,8 @@ struct N_XSOCKADDR_IN {
   }
 
   uint16_t sin_family;
-  xe::be<uint16_t> sin_port;
-  xe::be<uint32_t> sin_addr;
+  uint16_t sin_port;
+  uint32_t sin_addr;
   // sin_zero is defined as __pad on Android, so prefixed here.
   char x_sin_zero[8];
 };
