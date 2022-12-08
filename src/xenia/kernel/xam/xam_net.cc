@@ -455,7 +455,7 @@ dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> addr_ptr) {
   // Just return a loopback address atm.
   addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->inaOnline.s_addr = 0;
+  addr_ptr->inaOnline.s_addr = htonl(INADDR_LOOPBACK);
   addr_ptr->wPortOnline = 0;
 
   // TODO(gibbed): A proper mac address.
@@ -473,7 +473,9 @@ dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
 
   std::memset(addr_ptr->abOnline, 0, 20);
 
-  return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+  return XnAddrStatus::XNET_GET_XNADDR_STATIC |
+         XnAddrStatus::XNET_GET_XNADDR_GATEWAY |
+         XnAddrStatus::XNET_GET_XNADDR_DNS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetTitleXnAddr, kNetworking, kStub);
 
@@ -505,10 +507,16 @@ DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToString, kNetworking, kStub);
 // subsequent socket calls (like a handle to a XNet address)
 dword_result_t NetDll_XNetXnAddrToInAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> xn_addr,
-                                               lpvoid_t xid, lpvoid_t in_addr) {
+                                               lpvoid_t xid,
+                                               pointer_t<in_addr> in_addr) {
+  if (xn_addr->inaOnline.s_addr != 0) {
+    in_addr->s_addr = xn_addr->inaOnline.s_addr;
+    return 0;
+  }
+
   return 1;
 }
-DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToInAddr, kNetworking, kStub);
+DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToInAddr, kNetworking, kSketchy);
 
 // Does the reverse of the above.
 // FIXME: Arguments may not be correct.
@@ -1060,6 +1068,19 @@ dword_result_t NetDll___WSAFDIsSet_entry(dword_t socket_handle,
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll___WSAFDIsSet, kNetworking, kImplemented);
+
+dword_result_t NetDll_XNetConnect_entry(dword_t, pointer_t<in_addr> addr) {
+  XELOGD("NetDll_XNetConnect unimplemented");
+  return 0;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetConnect, kNetworking, kStub);
+
+dword_result_t NetDll_XNetGetConnectStatus_entry(dword_t,
+                                                 pointer_t<in_addr> addr) {
+  XELOGD("NetDll_XNetGetConnectStatus unimplemented");
+  return 2;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetGetConnectStatus, kNetworking, kStub);
 
 void NetDll_WSASetLastError_entry(dword_t error_code) {
   XThread::SetLastError(error_code);
