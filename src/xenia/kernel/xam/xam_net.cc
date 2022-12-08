@@ -537,18 +537,37 @@ struct XEthernetStatus {
 };
 
 dword_result_t NetDll_XNetGetEthernetLinkStatus_entry(dword_t caller) {
-  return 0;
+  return XEthernetStatus::XNET_ETHERNET_LINK_ACTIVE;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetEthernetLinkStatus, kNetworking, kStub);
 
 dword_result_t NetDll_XNetDnsLookup_entry(dword_t caller, lpstring_t host,
                                           dword_t event_handle,
                                           lpdword_t pdns) {
-  // TODO(gibbed): actually implement this
   if (pdns) {
+    hostent* ent = gethostbyname(host);
+
     auto dns_guest = kernel_memory()->SystemHeapAlloc(sizeof(XNDNS));
     auto dns = kernel_memory()->TranslateVirtual<XNDNS*>(dns_guest);
-    dns->status = 1;  // non-zero = error
+
+    if (ent == nullptr) {
+#ifdef XE_PLATFORM_WIN32
+      dns->status = WSAGetLastError();
+#else
+      dns->status = (int32_t)X_WSAError::X_WSAENETDOWN;
+#endif
+    } else if (ent->h_addrtype != AF_INET) {
+      dns->status = (int32_t)X_WSAError::X_WSANO_DATA;
+    } else {
+      dns->status = 0;
+      int i = 0;
+      while (ent->h_addr_list[i] != nullptr && i < 8) {
+        dns->aina[i] = *reinterpret_cast<in_addr*>(ent->h_addr_list[i]);
+        i++;
+      }
+      dns->cina = i;
+    }
+
     *pdns = dns_guest;
   }
   if (event_handle) {
@@ -559,7 +578,7 @@ dword_result_t NetDll_XNetDnsLookup_entry(dword_t caller, lpstring_t host,
   }
   return 0;
 }
-DECLARE_XAM_EXPORT1(NetDll_XNetDnsLookup, kNetworking, kStub);
+DECLARE_XAM_EXPORT1(NetDll_XNetDnsLookup, kNetworking, kImplemented);
 
 dword_result_t NetDll_XNetDnsRelease_entry(dword_t caller,
                                            pointer_t<XNDNS> dns) {
