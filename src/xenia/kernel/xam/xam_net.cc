@@ -299,7 +299,7 @@ DECLARE_XAM_EXPORT1(NetDll_WSAGetLastError, kNetworking, kImplemented);
 dword_result_t NetDll_WSARecvFrom_entry(
     dword_t caller, dword_t socket, pointer_t<XWSABUF> buffers_ptr,
     dword_t buffer_count, lpdword_t num_bytes_recv, lpdword_t flags_ptr,
-    pointer_t<XSOCKADDR_IN> from_addr, pointer_t<XWSAOVERLAPPED> overlapped_ptr,
+    pointer_t<XSOCKADDR> from_addr, pointer_t<XWSAOVERLAPPED> overlapped_ptr,
     lpvoid_t completion_routine_ptr) {
   if (overlapped_ptr) {
     // auto evt = kernel_state()->object_table()->LookupObject<XEvent>(
@@ -321,7 +321,7 @@ DECLARE_XAM_EXPORT2(NetDll_WSARecvFrom, kNetworking, kStub, kHighFrequency);
 dword_result_t NetDll_WSASendTo_entry(
     dword_t caller, dword_t socket_handle, pointer_t<XWSABUF> buffers,
     dword_t num_buffers, lpdword_t num_bytes_sent, dword_t flags,
-    pointer_t<XSOCKADDR_IN> to_ptr, dword_t to_len,
+    pointer_t<XSOCKADDR> to_ptr, dword_t to_len,
     pointer_t<XWSAOVERLAPPED> overlapped, lpvoid_t completion_routine) {
   assert(!overlapped);
   assert(!completion_routine);
@@ -349,9 +349,8 @@ dword_result_t NetDll_WSASendTo_entry(
     combined_buffer_offset += buffers[i].len;
   }
 
-  N_XSOCKADDR_IN native_to(to_ptr);
   socket->SendTo(combined_buffer_mem.data(), combined_buffer_size, flags,
-                 &native_to, to_len);
+                 to_ptr, to_len);
 
   // TODO: Instantly complete overlapped
 
@@ -765,8 +764,7 @@ dword_result_t NetDll_ioctlsocket_entry(dword_t caller, dword_t socket_handle,
 DECLARE_XAM_EXPORT1(NetDll_ioctlsocket, kNetworking, kImplemented);
 
 dword_result_t NetDll_bind_entry(dword_t caller, dword_t socket_handle,
-                                 pointer_t<XSOCKADDR_IN> name,
-                                 dword_t namelen) {
+                                 pointer_t<XSOCKADDR> name, dword_t namelen) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -774,8 +772,7 @@ dword_result_t NetDll_bind_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR_IN native_name(name);
-  X_STATUS status = socket->Bind(&native_name, namelen);
+  X_STATUS status = socket->Bind(name, namelen);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
@@ -795,8 +792,7 @@ dword_result_t NetDll_connect_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR native_name(name);
-  X_STATUS status = socket->Connect(&native_name, namelen);
+  X_STATUS status = socket->Connect(name, namelen);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
@@ -840,12 +836,9 @@ dword_result_t NetDll_accept_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR native_addr(addr_ptr);
   int native_len = *addrlen_ptr;
-  auto new_socket = socket->Accept(&native_addr, &native_len);
+  auto new_socket = socket->Accept(addr_ptr, &native_len);
   if (new_socket) {
-    addr_ptr->address_family = native_addr.address_family;
-    std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
     *addrlen_ptr = native_len;
 
     return new_socket->handle();
@@ -984,7 +977,7 @@ DECLARE_XAM_EXPORT1(NetDll_recv, kNetworking, kImplemented);
 dword_result_t NetDll_recvfrom_entry(dword_t caller, dword_t socket_handle,
                                      lpvoid_t buf_ptr, dword_t buf_len,
                                      dword_t flags,
-                                     pointer_t<XSOCKADDR_IN> from_ptr,
+                                     pointer_t<XSOCKADDR> from_ptr,
                                      lpdword_t fromlen_ptr) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
@@ -993,20 +986,9 @@ dword_result_t NetDll_recvfrom_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR_IN native_from;
-  if (from_ptr) {
-    native_from = *from_ptr;
-  }
   uint32_t native_fromlen = fromlen_ptr ? fromlen_ptr.value() : 0;
-  int ret = socket->RecvFrom(buf_ptr, buf_len, flags, &native_from,
+  int ret = socket->RecvFrom(buf_ptr, buf_len, flags, from_ptr,
                              fromlen_ptr ? &native_fromlen : 0);
-
-  if (from_ptr) {
-    from_ptr->sin_family = native_from.sin_family;
-    from_ptr->sin_port = native_from.sin_port;
-    from_ptr->sin_addr = native_from.sin_addr;
-    std::memset(from_ptr->x_sin_zero, 0, sizeof(from_ptr->x_sin_zero));
-  }
   if (fromlen_ptr) {
     *fromlen_ptr = native_fromlen;
   }
@@ -1039,8 +1021,7 @@ DECLARE_XAM_EXPORT1(NetDll_send, kNetworking, kImplemented);
 
 dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
                                    lpvoid_t buf_ptr, dword_t buf_len,
-                                   dword_t flags,
-                                   pointer_t<XSOCKADDR_IN> to_ptr,
+                                   dword_t flags, pointer_t<XSOCKADDR> to_ptr,
                                    dword_t to_len) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
@@ -1049,8 +1030,7 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR_IN native_to(to_ptr);
-  int ret = socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+  int ret = socket->SendTo(buf_ptr, buf_len, flags, to_ptr, to_len);
   if (ret < 0) {
     XThread::SetLastError(socket->GetLastWSAError());
   }
@@ -1102,16 +1082,13 @@ dword_result_t NetDll_getpeername_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR native_addr(addr_ptr);
   int native_len = *addrlen_ptr;
-  X_STATUS status = socket->GetPeerName(&native_addr, &native_len);
+  X_STATUS status = socket->GetPeerName(addr_ptr, &native_len);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
 
-  addr_ptr->address_family = native_addr.address_family;
-  std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
   *addrlen_ptr = native_len;
   return 0;
 }
@@ -1132,16 +1109,13 @@ dword_result_t NetDll_getsockname_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
-  N_XSOCKADDR native_addr(addr_ptr);
   int native_len = *addrlen_ptr;
-  X_STATUS status = socket->GetSockName(&native_addr, &native_len);
+  X_STATUS status = socket->GetSockName(addr_ptr, &native_len);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
 
-  addr_ptr->address_family = native_addr.address_family;
-  std::memcpy(addr_ptr->sa_data, native_addr.sa_data, *addrlen_ptr - 2);
   *addrlen_ptr = native_len;
   return 0;
 }
