@@ -22,10 +22,12 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
+#include "third_party/libjuice/include/juice/juice.h"
+
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
-#include <winsock2.h>                    // NOLINT(build/include_order)
+#include <WS2tcpip.h>                    // NOLINT(build/include_order)
 #elif XE_PLATFORM_LINUX
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -456,12 +458,73 @@ struct XnAddrStatus {
   static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
 };
 
+juice_agent_t* juice_agent_ = nullptr;
+bool stunned_ = false;
+in_addr private_ip_;
+in_addr public_ip_;
+uint32_t port_ = 9876;
+
+static void on_stun_candidate(juice_agent_t* agent, const char* sdp,
+                              void* user_ptr) {
+  char* sdp_copy = strdup(sdp);
+
+  char* token = std::strtok(sdp_copy, " ");
+  int i = 0;
+  in_addr ip = {};
+  while (token != nullptr) {
+    if (i == 4) {
+      inet_pton(AF_INET, token, &ip);
+    } else if (i == 5) {
+      port_ = std::strtoul(token, NULL, 10);
+    } else if (std::strcmp(token, "typ") == 0) {
+      auto type = std::strtok(NULL, " ");
+      if (std::strcmp(type, "srflx") == 0) {
+        public_ip_ = ip;
+      } else {
+        private_ip_ = ip;
+      }
+    }
+    token = std::strtok(NULL, " ");
+    i++;
+  }
+
+  free(sdp_copy);
+  return;
+}
+
+static void on_stun_gathering_done(juice_agent_t* agent, void* user_ptr) {
+  juice_set_remote_gathering_done(agent);
+  stunned_ = true;
+}
+
 dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> addr_ptr) {
+  if (!stunned_) {
+    if (!juice_agent_) {
+      juice_config_t config;
+      std::memset(&config, 0, sizeof(config));
+
+      config.stun_server_host = "stun.l.google.com";
+      config.stun_server_port = 19302;
+
+      config.cb_candidate = on_stun_candidate;
+      config.cb_gathering_done = on_stun_gathering_done;
+
+      juice_agent_ = juice_create(&config);
+
+      juice_gather_candidates(juice_agent_);
+    }
+
+    return XnAddrStatus::XNET_GET_XNADDR_PENDING;
+  } else if (juice_agent_) {
+    juice_destroy(juice_agent_);
+    juice_agent_ = nullptr;
+  }
+
   // Just return a loopback address atm.
-  addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->inaOnline.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->wPortOnline = 0;
+  addr_ptr->ina = private_ip_;
+  addr_ptr->inaOnline = public_ip_;
+  addr_ptr->wPortOnline = port_;
 
   // TODO(gibbed): A proper mac address.
   // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
