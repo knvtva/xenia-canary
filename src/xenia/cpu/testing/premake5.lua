@@ -13,6 +13,8 @@ test_suite("xenia-cpu-tests", project_root, ".", {
     "xenia-kernel",
     "xenia-ui", -- needed by xenia-base
     "xenia-patcher",
+    "xenia-gpu",
+    "imgui",
   },
   filtered_links = {
     {

@@ -11,6 +11,7 @@
 
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
+#include "xenia/kernel/xam/xam_net.h"
 
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
@@ -52,7 +53,7 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t arg1,
       assert_true(!arg2 || arg2 == 4);
       auto buffer = memory_->TranslateVirtual(arg1);
       XELOGD("XLiveBaseGetNatType({:08X})", arg1);
-      xe::store_and_swap<uint32_t>(buffer + 0, 1);  // XONLINE_NAT_OPEN
+      xe::store_and_swap<uint32_t>(buffer + 0, xeXOnlineGetNatType());
       return X_E_SUCCESS;
     }
     case 0x00058007: {

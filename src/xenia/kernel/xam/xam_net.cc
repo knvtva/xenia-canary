@@ -14,6 +14,7 @@
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/xam_module.h"
+#include "xenia/kernel/xam/xam_net.h"
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_error.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
@@ -25,7 +26,10 @@
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
-#include <winsock2.h>                    // NOLINT(build/include_order)
+#include <WS2tcpip.h>                    // NOLINT(build/include_order)
+#include <comutil.h>
+#include <natupnp.h>
+#include <wrl/client.h>
 #elif XE_PLATFORM_LINUX
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -456,12 +460,109 @@ struct XnAddrStatus {
   static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
 };
 
+bool upnp_fetched_ = false;
+in_addr local_ip_ = {};
+in_addr online_ip_ = {};
+
+static void FetchUPnP() {
+  auto sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock < 0) {
+    return;
+  }
+
+  sockaddr_in addrin;
+  addrin.sin_family = AF_INET;
+  addrin.sin_port = 65535;
+  addrin.sin_addr.s_addr = inet_addr("1.1.1.1");
+  auto ret = connect(sock, (struct sockaddr*)&addrin, sizeof(addrin));
+  if (ret < 0) {
+    return;
+  }
+
+  int socklen = sizeof(addrin);
+  ret = getsockname(sock, (struct sockaddr*)&addrin, &socklen);
+  if (ret < 0) {
+    return;
+  }
+  local_ip_ = addrin.sin_addr;
+
+  closesocket(sock);
+
+#ifdef XE_PLATFORM_WIN32
+  Microsoft::WRL::ComPtr<IUPnPNAT> nat;
+  HRESULT hr =
+      CoCreateInstance(CLSID_UPnPNAT, NULL, CLSCTX_ALL, IID_PPV_ARGS(&nat));
+  if (FAILED(hr)) {
+    XELOGE("Failed to create UPnP instance: {:08X}", (uint32_t)hr);
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<IStaticPortMappingCollection> staticPortMappings;
+  hr = nat->get_StaticPortMappingCollection(&staticPortMappings);
+  if (FAILED(hr) || staticPortMappings.Get() == nullptr) {
+    XELOGE("Failed to get UPnP port mapping collection: {:08X}", (uint32_t)hr);
+    return;
+  }
+
+  wchar_t local_ip_str[INET_ADDRSTRLEN];
+  InetNtopW(AF_INET, &addrin.sin_addr, local_ip_str, INET_ADDRSTRLEN);
+
+  Microsoft::WRL::ComPtr<IStaticPortMapping> portMapping;
+  hr = staticPortMappings->Add(3074, _bstr_t{L"UDP"}, 3074,
+                               _bstr_t{local_ip_str}, VARIANT_TRUE,
+                               _bstr_t{L"xenia-burnout5"}, &portMapping);
+  if (FAILED(hr)) {
+    XELOGE("Failed to create UPnP port mapping: {:08X}", (uint32_t)hr);
+    return;
+  }
+
+  BSTR external_ip = 0;
+  hr = portMapping->get_ExternalIPAddress(&external_ip);
+  if (FAILED(hr)) {
+    XELOGE("Failed to get external IP address from UPnP: {:08X}", (uint32_t)hr);
+    return;
+  }
+  if (InetPtonW(AF_INET, external_ip, &online_ip_) != 1) {
+    online_ip_.s_addr = 0;
+    XELOGE("Failed to parse external IP address from UPnP");
+  }
+  SysFreeString(external_ip);
+#endif
+}
+
+uint32_t xeXOnlineGetNatType() {
+  if (!upnp_fetched_) {
+    // TODO: this should be done ahead of time.
+    FetchUPnP();
+    upnp_fetched_ = true;
+  }
+
+  // 1 = open, 3 = strict
+  return (online_ip_.s_addr != 0) ? 1 : 3;
+}
+
 dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> addr_ptr) {
-  // Just return a loopback address atm.
-  addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->inaOnline.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->wPortOnline = 0;
+  if (!upnp_fetched_) {
+    // TODO: this should be done ahead of time, or
+    // asynchronously returning XNET_GET_XNADDR_PENDING
+    FetchUPnP();
+    upnp_fetched_ = true;
+  }
+
+  addr_ptr->ina = local_ip_;
+  addr_ptr->inaOnline = online_ip_;
+  addr_ptr->wPortOnline = 3074;
+
+  auto status = XnAddrStatus::XNET_GET_XNADDR_STATIC |
+                XnAddrStatus::XNET_GET_XNADDR_GATEWAY |
+                XnAddrStatus::XNET_GET_XNADDR_DNS;
+
+  if (online_ip_.s_addr != 0) {
+    status |= XnAddrStatus::XNET_GET_XNADDR_ONLINE;
+  } else {
+    addr_ptr->inaOnline = local_ip_;
+  }
 
   // TODO(gibbed): A proper mac address.
   // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
@@ -478,9 +579,7 @@ dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
 
   std::memset(addr_ptr->abOnline, 0, 20);
 
-  return XnAddrStatus::XNET_GET_XNADDR_STATIC |
-         XnAddrStatus::XNET_GET_XNADDR_GATEWAY |
-         XnAddrStatus::XNET_GET_XNADDR_DNS;
+  return status;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetTitleXnAddr, kNetworking, kStub);
 
