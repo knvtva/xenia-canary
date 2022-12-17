@@ -12,6 +12,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
 #include "xenia/kernel/xam/xam_net.h"
+#include "xenia/kernel/xenumerator.h"
 
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
@@ -27,6 +28,19 @@ struct XONLINE_SERVICE_INFO {
   xe::be<uint16_t> port;
   xe::be<uint16_t> unk;
 };
+
+#pragma pack(push, 4)
+struct XONLINE_PRESENCE {
+  xe::be<uint64_t> xuid;
+  xe::be<uint32_t> state;
+  uint8_t session_id[8];
+  xe::be<uint32_t> title_id;
+  xe::be<uint64_t> state_change_time;  // filetime
+  xe::be<uint32_t> num_rich_presence;
+  xe::be<char16_t> rich_presence[64];
+};
+#pragma pack(pop)
+static_assert_size(XONLINE_PRESENCE, 164);
 
 namespace xe {
 namespace kernel {
@@ -69,6 +83,63 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t arg1,
       service_info->id = arg1;
       service_info->ip.s_addr = htonl(INADDR_LOOPBACK);
       return X_ERROR_SUCCESS;
+    }
+    case 0x00058019: {
+      struct argument_item {
+        xe::be<uint32_t> unk_00;  // Always set to 4
+        xe::be<uint32_t> unk_04;
+        xe::be<uint64_t> data;
+      };
+
+      // Called from XPresenceCreateEnumerator
+      struct message_data {
+        argument_item user_index;
+        argument_item num_peers;
+        argument_item peer_xuids_ptr;
+        argument_item starting_index;
+        argument_item max_peers;
+        argument_item buffer_length_ptr;      // output
+        argument_item enumerator_handle_ptr;  // output
+      }* data =
+          reinterpret_cast<message_data*>(memory_->TranslateVirtual(arg2));
+
+      auto num_peers = *reinterpret_cast<xe::be<uint32_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->num_peers.data));
+      auto max_peers = *reinterpret_cast<xe::be<uint32_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->max_peers.data));
+      auto starting_index = *reinterpret_cast<xe::be<uint32_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->starting_index.data));
+
+      assert_true(max_peers <= 100);
+      assert_true(starting_index < num_peers);
+
+      auto return_count = std::min(num_peers - starting_index, max_peers.get());
+      auto e = make_object<XStaticEnumerator<XONLINE_PRESENCE>>(kernel_state_,
+                                                                return_count);
+
+      auto user_index = *reinterpret_cast<xe::be<uint32_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->user_index.data));
+      auto result = e->Initialize(user_index, 0xFE, 0x5801A, 0x5801B, 0);
+      if (XFAILED(result)) {
+        return result;
+      }
+
+      auto xuids = reinterpret_cast<const xe::be<uint64_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->peer_xuids_ptr.data));
+      for (auto i = starting_index; i < e->items_per_enumerate(); i++) {
+        auto item = e->AppendItem();
+        std::memset(item, 0, sizeof(item));
+        item->xuid = xuids[i];
+      }
+
+      *reinterpret_cast<xe::be<uint32_t>*>(
+          memory_->TranslateVirtual((uint32_t)data->buffer_length_ptr.data)) =
+          uint32_t(e->items_per_enumerate() * e->item_size());
+      *reinterpret_cast<xe::be<uint32_t>*>(memory_->TranslateVirtual(
+          (uint32_t)data->enumerator_handle_ptr.data)) = e->handle();
+
+      XELOGD("XLiveBase(0x00058019)({:08X}, {:08X})", arg1, arg2);
+      return X_E_SUCCESS;
     }
     case 0x00058020: {
       // 0x00058004 is called right before this.
