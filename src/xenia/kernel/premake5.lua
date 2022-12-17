@@ -9,7 +9,6 @@ project("xenia-kernel")
   links({
     "aes_128",
     "fmt",
-    "libjuice",
     "xenia-apu",
     "xenia-base",
     "xenia-cpu",
@@ -17,7 +16,6 @@ project("xenia-kernel")
     "xenia-vfs",
   })
   defines({
-    "JUICE_STATIC",
   })
   recursive_platform_files()
   files({
