@@ -383,11 +383,6 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
   uint32_t output_write_offset =
       data->output_buffer_write_offset * kBytesPerSubframeChannel;
 
-  if (output_capacity == 0) {
-    data->output_buffer_valid = 0;
-    return;
-  }
-
   RingBuffer output_rb(output_buffer, output_capacity);
   output_rb.set_read_offset(output_read_offset);
   output_rb.set_write_offset(output_write_offset);
