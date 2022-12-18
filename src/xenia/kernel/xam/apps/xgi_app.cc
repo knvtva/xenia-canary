@@ -133,13 +133,31 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       // Local uses user indices, remote uses XUIDs
       if (xuid_array == 0) {
-        XELOGD("XGISessionJoinLocal({:08X}, {}, {}, {:08X}, {:08X})",
+        XELOGD("XGISessionJoinLocal({:08X}, {}, {:08X}, {:08X}, {:08X})",
                session_ptr, array_count, xuid_array, user_index_array,
                private_slots_array);
       } else {
-        XELOGD("XGISessionJoinRemote({:08X}, {}, {}, {:08X}, {:08X})",
+        XELOGD("XGISessionJoinRemote({:08X}, {}, {:08X}, {:08X}, {:08X})",
                session_ptr, array_count, xuid_array, user_index_array,
                private_slots_array);
+      }
+      return X_E_SUCCESS;
+    }
+    case 0x000B0013: {
+      assert_true(buffer_length == 0x14);
+      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
+      uint32_t array_count = xe::load_and_swap<uint32_t>(buffer + 0x4);
+      uint32_t xuid_array = xe::load_and_swap<uint32_t>(buffer + 0x8);
+      uint32_t user_index_array = xe::load_and_swap<uint32_t>(buffer + 0xC);
+      uint32_t unk010 = xe::load_and_swap<uint32_t>(buffer + 0x10);
+
+      // Local uses user indices, remote uses XUIDs
+      if (xuid_array == 0) {
+        XELOGD("XGISessionLeaveLocal({:08X}, {}, {:08X}, {:08X}, {:08X})",
+               session_ptr, array_count, xuid_array, user_index_array, unk010);
+      } else {
+        XELOGD("XGISessionLeaveRemote({:08X}, {}, {:08X}, {:08X}, {:08X})",
+               session_ptr, array_count, xuid_array, user_index_array, unk010);
       }
       return X_E_SUCCESS;
     }
