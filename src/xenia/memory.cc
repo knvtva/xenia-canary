@@ -211,6 +211,12 @@ bool Memory::Initialize() {
   heaps_.vA0000000.Alloc(0x340000, 64 * 1024, kMemoryAllocationReserve,
                          kMemoryProtectNoAccess, true, &unk_phys_alloc);
 
+  // PRV register (hack?)
+  heaps_.v80000000.AllocFixed(
+      0x8FFF1000, 0x1000, 0x1000,
+      kMemoryAllocationReserve | kMemoryAllocationCommit,
+      kMemoryProtectRead | kMemoryProtectWrite);
+
   return true;
 }
 
