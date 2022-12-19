@@ -118,6 +118,13 @@ void KeSaveFloatingPointState_entry(ppc_context_t& ctx) {
 DECLARE_XBOXKRNL_EXPORT1(KeSaveFloatingPointState, kNone, kImplemented);
 #endif
 
+void KeSetPRVRegister_entry(dword_t arg1, qword_t arg2) {
+  assert_true(arg1 < 0x1000);
+  *kernel_memory()->TranslateVirtual<xe::be<uint64_t>*>(0x8FFF1000 + arg1) =
+      arg2.value();
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSetPRVRegister, kNone, kSketchy);
+
 }  // namespace xboxkrnl
 }  // namespace kernel
 }  // namespace xe
