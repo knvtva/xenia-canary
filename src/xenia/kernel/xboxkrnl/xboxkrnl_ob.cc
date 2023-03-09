@@ -161,27 +161,28 @@ dword_result_t ObReferenceObjectByName_entry(pointer_t<X_ANSI_STRING> name,
 }
 DECLARE_XBOXKRNL_EXPORT1(ObReferenceObjectByName, kNone, kImplemented);
 
-void ObDereferenceObject_entry(dword_t native_ptr, const ppc_context_t& ctx) {
-  // Check if a dummy value from ObReferenceObjectByHandle.
-  if (native_ptr == 0xDEADF00D) {
-    return;
-  }
-  if (!native_ptr) {
-    XELOGE("Null native ptr in ObDereferenceObject!");
-    return;
-  }
-
-  auto object = XObject::GetNativeObject<XObject>(
-      kernel_state(), kernel_memory()->TranslateVirtual(native_ptr));
-  if (object) {
-    object->ReleaseHandle();
-
-  } else {
-    if (native_ptr) {
-      XELOGW("Unregistered guest object provided to ObDereferenceObject {:08X}",
-             native_ptr.value());
-    }
-  }
+//void ObDereferenceObject_entry(dword_t native_ptr, const ppc_context_t& ctx) {
+//  // Check if a dummy value from ObReferenceObjectByHandle.
+//  //if (native_ptr == 0xDEADF00D) {
+//  //  return;
+//  //}
+//
+//  auto object = XObject::GetNativeObject<XObject>(
+//      kernel_state(), kernel_memory()->TranslateVirtual(native_ptr));
+//  if (object) {
+//    object->ReleaseHandle();
+//
+//  } else {
+//    if (native_ptr) {
+//      XELOGW("Unregistered guest object provided to ObDereferenceObject {:08X}",
+//             native_ptr.value());
+//    }
+//  }
+//  return;
+//}
+void ObDereferenceObject_entry(dword_t native_ptr,
+                               dword_t ptr2 /* const ppc_context_t ctx*/) {
+  XELOGI("ObDereferenceObject");
   return;
 }
 DECLARE_XBOXKRNL_EXPORT1(ObDereferenceObject, kNone, kImplemented);

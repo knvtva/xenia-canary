@@ -21,6 +21,7 @@
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
+#include <random>
 
 
 DECLARE_int32(user_language);
@@ -190,6 +191,9 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
 
     xe::string_util::copy_truncating(info->name, user_profile->name(),
                                      xe::countof(info->name));
+    info->xuid = user_profile->xuid_online();
+    // This flag seems to tell the title we're online.
+    info->flags = 1;
   } else {
     return X_E_NO_SUCH_USER;
   }
@@ -900,17 +904,31 @@ dword_result_t XamWriteGamerTile_entry(dword_t arg1, dword_t arg2, dword_t arg3,
 DECLARE_XAM_EXPORT1(XamWriteGamerTile, kUserProfiles, kStub);
 
 dword_result_t XamSessionCreateHandle_entry(lpdword_t handle_ptr) {
-  *handle_ptr = 0xCAFEDEAD;
+  std::random_device rd;
+  std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
+  *handle_ptr = dist(rd);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSessionCreateHandle, kUserProfiles, kStub);
 
+// This is dirty, we should be creating a local xobject for sessions,
+// but I've not implemented that, so instead I pass the session handle around
+// as if it's a pointer. Fortunately all functions which use that pointer are
+// within xenia anyway, but in future this should actually be a pointer.
+// - Codie
+
+//dword_result_t XamSessionRefObjByHandle_entry(dword_t handle,
+//                                              lpdword_t obj_ptr) {
+//  assert_true(handle == 0xCAFEDEAD);
+//  // TODO(PermaNull): Implement this properly,
+//  // For the time being returning 0xDEADF00D will prevent crashing.
+//  *obj_ptr = 0xDEADF00D;
+//  return X_ERROR_SUCCESS;
+//}
+
 dword_result_t XamSessionRefObjByHandle_entry(dword_t handle,
                                               lpdword_t obj_ptr) {
-  assert_true(handle == 0xCAFEDEAD);
-  // TODO(PermaNull): Implement this properly,
-  // For the time being returning 0xDEADF00D will prevent crashing.
-  *obj_ptr = 0xDEADF00D;
+  *obj_ptr = (uint32_t)handle;
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSessionRefObjByHandle, kUserProfiles, kStub);

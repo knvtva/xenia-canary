@@ -32,6 +32,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+#include <src/xenia/kernel/xam/xam_net.h>
+using namespace xe::kernel::xam;
 
 namespace xe {
 namespace kernel {
@@ -144,6 +146,11 @@ X_STATUS XSocket::Connect(const XSOCKADDR* name, int name_len) {
   n_name.ss_family = name->address_family;
   std::memcpy(reinterpret_cast<uint8_t*>(&n_name) + family_size, name->sa_data,
               name_len - family_size);
+
+  auto addrin = reinterpret_cast<sockaddr_in*>(&n_name);
+
+  addrin->sin_port = htons(GetMappedConnectPort(ntohs(addrin->sin_port)));
+
   int ret = connect(native_handle_, (const sockaddr*)&n_name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
@@ -164,6 +171,11 @@ X_STATUS XSocket::Bind(const XSOCKADDR* name, int name_len) {
   n_name.ss_family = name->address_family;
   std::memcpy(reinterpret_cast<uint8_t*>(&n_name) + family_size, name->sa_data,
               name_len - family_size);
+
+  auto addrin = reinterpret_cast<sockaddr_in*>(&n_name);
+
+  addrin->sin_port = htons(GetMappedBindPort(ntohs(addrin->sin_port)));
+
   int ret = bind(native_handle_, (const sockaddr*)&n_name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
@@ -202,7 +214,7 @@ object_ref<XSocket> XSocket::Accept(XSOCKADDR* name, int* name_len) {
                          name ? (sockaddr*)&n_sockaddr : nullptr, &n_name_len);
   if (ret == -1) {
     if (name && name_len) {
-      std::memset(name, 0, *name_len);
+      std::memset((sockaddr*)name, 0, *name_len);
       *name_len = 0;
     }
     return nullptr;
@@ -570,6 +582,9 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
     std::memcpy(reinterpret_cast<uint8_t*>(&nto) + family_size, to->sa_data,
                 to_len - family_size);
   }
+
+  auto addrin = reinterpret_cast<sockaddr_in*>(&nto);
+  addrin->sin_port = htons(GetMappedBindPort(ntohs(addrin->sin_port)));
 
   return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
                 to ? (const sockaddr*)&nto : nullptr, to_len);
