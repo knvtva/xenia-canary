@@ -264,6 +264,8 @@ workspace("xenia")
   include("third_party/snappy.lua")
   include("third_party/xxhash.lua")
   include("third_party/rapidjson.lua")
+  include("third_party/zarchive.lua")
+  include("third_party/zstd.lua")
 
   if not os.istarget("android") then
     -- SDL2 requires sdl2-config, and as of November 2020 isn't high-quality on
