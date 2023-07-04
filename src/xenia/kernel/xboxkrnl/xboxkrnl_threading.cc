@@ -96,12 +96,11 @@ object_ref<T> LookupNamedObject(KernelState* kernel_state,
   return nullptr;
 }
 
-dword_result_t ExCreateThread_entry(lpdword_t handle_ptr, dword_t stack_size,
-                                    lpdword_t thread_id_ptr,
-                                    dword_t xapi_thread_startup,
-                                    lpvoid_t start_address,
-                                    lpvoid_t start_context,
-                                    dword_t creation_flags) {
+uint32_t ExCreateThread(xe::be<uint32_t>* handle_ptr, uint32_t stack_size,
+                        xe::be<uint32_t>* thread_id_ptr,
+                        uint32_t xapi_thread_startup, uint32_t start_address,
+                        uint32_t start_context, uint32_t creation_flags) {
+  // Invalid Link
   // http://jafile.com/uploads/scoop/main.cpp.txt
   // DWORD
   // LPHANDLE Handle,
@@ -125,8 +124,7 @@ dword_result_t ExCreateThread_entry(lpdword_t handle_ptr, dword_t stack_size,
 
   auto thread = object_ref<XThread>(
       new XThread(kernel_state(), actual_stack_size, xapi_thread_startup,
-                  start_address.guest_address(), start_context.guest_address(),
-                  creation_flags, true));
+                  start_address, start_context, creation_flags, true));
 
   X_STATUS result = thread->Create();
   if (XFAILED(result)) {
@@ -149,18 +147,32 @@ dword_result_t ExCreateThread_entry(lpdword_t handle_ptr, dword_t stack_size,
   }
   return result;
 }
+
+dword_result_t ExCreateThread_entry(lpdword_t handle_ptr, dword_t stack_size,
+                                    lpdword_t thread_id_ptr,
+                                    dword_t xapi_thread_startup,
+                                    lpvoid_t start_address,
+                                    lpvoid_t start_context,
+                                    dword_t creation_flags) {
+  return ExCreateThread(handle_ptr, stack_size, thread_id_ptr,
+                        xapi_thread_startup, start_address, start_context,
+                        creation_flags);
+}
 DECLARE_XBOXKRNL_EXPORT1(ExCreateThread, kThreading, kImplemented);
 
-dword_result_t ExTerminateThread_entry(dword_t exit_code) {
+uint32_t ExTerminateThread(uint32_t exit_code) {
   XThread* thread = XThread::GetCurrentThread();
 
   // NOTE: this kills us right now. We won't return from it.
   return thread->Exit(exit_code);
 }
+
+dword_result_t ExTerminateThread_entry(dword_t exit_code) {
+  return ExTerminateThread(exit_code);
+}
 DECLARE_XBOXKRNL_EXPORT1(ExTerminateThread, kThreading, kImplemented);
 
-dword_result_t NtResumeThread_entry(dword_t handle,
-                                    lpdword_t suspend_count_ptr) {
+uint32_t NtResumeThread(uint32_t handle, uint32_t* suspend_count_ptr) {
   X_RESULT result = X_STATUS_INVALID_HANDLE;
   uint32_t suspend_count = 0;
 
@@ -169,7 +181,6 @@ dword_result_t NtResumeThread_entry(dword_t handle,
   if (thread) {
     if (thread->type() == XObject::Type::Thread) {
       result = thread->Resume(&suspend_count);
-
     } else {
       return X_STATUS_OBJECT_TYPE_MISMATCH;
     }
@@ -182,9 +193,24 @@ dword_result_t NtResumeThread_entry(dword_t handle,
 
   return result;
 }
+
+dword_result_t NtResumeThread_entry(dword_t handle,
+                                    lpdword_t suspend_count_ptr) {
+  uint32_t suspend_count =
+      suspend_count_ptr ? static_cast<uint32_t>(*suspend_count_ptr) : 0u;
+
+  const X_RESULT result =
+      NtResumeThread(handle, suspend_count_ptr ? &suspend_count : nullptr);
+
+  if (suspend_count_ptr) {
+    *suspend_count_ptr = suspend_count;
+  }
+
+  return result;
+}
 DECLARE_XBOXKRNL_EXPORT1(NtResumeThread, kThreading, kImplemented);
 
-dword_result_t KeResumeThread_entry(lpvoid_t thread_ptr) {
+dword_result_t KeResumeThread_entry(pointer_t<X_KTHREAD> thread_ptr) {
   X_STATUS result = X_STATUS_SUCCESS;
   auto thread = XObject::GetNativeObject<XThread>(kernel_state(), thread_ptr);
   if (thread) {
@@ -229,22 +255,39 @@ dword_result_t NtSuspendThread_entry(dword_t handle,
 }
 DECLARE_XBOXKRNL_EXPORT1(NtSuspendThread, kThreading, kImplemented);
 
+dword_result_t KeSuspendThread_entry(pointer_t<X_KTHREAD> kthread,
+                                     const ppc_context_t& context) {
+  auto thread =
+      XObject::GetNativeObject<XThread>(context->kernel_state, kthread);
+  uint32_t suspend_count_out = 0;
+
+  if (thread) {
+    suspend_count_out = thread->suspend_count();
+
+    uint32_t discarded_new_suspend_count = 0;
+    thread->Suspend(&discarded_new_suspend_count);
+  }
+
+  return suspend_count_out;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSuspendThread, kThreading, kImplemented);
+
 void KeSetCurrentStackPointers_entry(lpvoid_t stack_ptr,
                                      pointer_t<X_KTHREAD> thread,
                                      lpvoid_t stack_alloc_base,
-                                     lpvoid_t stack_base,
-                                     lpvoid_t stack_limit, const ppc_context_t& context) {
+                                     lpvoid_t stack_base, lpvoid_t stack_limit,
+                                     const ppc_context_t& context) {
   auto current_thread = XThread::GetCurrentThread();
 
   auto pcr = context->TranslateVirtualGPR<X_KPCR*>(context->r[13]);
-	//also supposed to load msr mask, and the current msr with that, and store
+  // also supposed to load msr mask, and the current msr with that, and store
   thread->stack_alloc_base = stack_alloc_base.value();
   thread->stack_base = stack_base.value();
   thread->stack_limit = stack_limit.value();
   pcr->stack_base_ptr = stack_base.guest_address();
   pcr->stack_end_ptr = stack_limit.guest_address();
   context->r[1] = stack_ptr.guest_address();
-  
+
   // If a fiber is set, and the thread matches, reenter to avoid issues with
   // host stack overflowing.
   if (thread->fiber_ptr &&
@@ -335,13 +378,20 @@ dword_result_t KeQueryPerformanceFrequency_entry() {
 DECLARE_XBOXKRNL_EXPORT2(KeQueryPerformanceFrequency, kThreading, kImplemented,
                          kHighFrequency);
 
-dword_result_t KeDelayExecutionThread_entry(dword_t processor_mode,
-                                            dword_t alertable,
-                                            lpqword_t interval_ptr) {
+uint32_t KeDelayExecutionThread(uint32_t processor_mode, uint32_t alertable,
+                                uint64_t* interval_ptr) {
   XThread* thread = XThread::GetCurrentThread();
   X_STATUS result = thread->Delay(processor_mode, alertable, *interval_ptr);
 
   return result;
+}
+
+dword_result_t KeDelayExecutionThread_entry(dword_t processor_mode,
+                                            dword_t alertable,
+                                            lpqword_t interval_ptr) {
+  uint64_t interval = interval_ptr ? static_cast<uint64_t>(*interval_ptr) : 0u;
+  return KeDelayExecutionThread(processor_mode, alertable,
+                                interval_ptr ? &interval : nullptr);
 }
 DECLARE_XBOXKRNL_EXPORT3(KeDelayExecutionThread, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
@@ -354,9 +404,18 @@ dword_result_t NtYieldExecution_entry() {
 DECLARE_XBOXKRNL_EXPORT2(NtYieldExecution, kThreading, kImplemented,
                          kHighFrequency);
 
-void KeQuerySystemTime_entry(lpqword_t time_ptr) {
-  uint64_t time = Clock::QueryGuestSystemTime();
+void KeQuerySystemTime_entry(lpqword_t time_ptr, const ppc_context_t& ctx) {
   if (time_ptr) {
+    // update the timestamp bundle to the time we queried.
+    // this is a race, but i don't of any sw that requires it, it just seems
+    // like we ought to keep it consistent with ketimestampbundle in case
+    // something uses this function, but also reads it directly
+    uint32_t ts_bundle = ctx->kernel_state->GetKeTimestampBundle();
+    uint64_t time = Clock::QueryGuestSystemTime();
+    // todo: cmpxchg?
+    xe::store_and_swap<uint64_t>(
+        &ctx->TranslateVirtual<X_TIME_STAMP_BUNDLE*>(ts_bundle)->system_time,
+        time);
     *time_ptr = time;
   }
 }
@@ -500,10 +559,10 @@ uint32_t xeNtSetEvent(uint32_t handle, xe::be<uint32_t>* previous_state_ptr) {
 
   auto ev = kernel_state()->object_table()->LookupObject<XEvent>(handle);
   if (ev) {
-	  //d3 ros does this
+    // d3 ros does this
     if (ev->type() != XObject::Type::Event) {
       return X_STATUS_OBJECT_TYPE_MISMATCH;
-	}
+    }
     int32_t was_signalled = ev->Set(0, false);
     if (previous_state_ptr) {
       *previous_state_ptr = static_cast<uint32_t>(was_signalled);
@@ -549,7 +608,6 @@ dword_result_t NtQueryEvent_entry(dword_t handle, lpdword_t out_struc) {
 
     out_struc[0] = type_tmp;
     out_struc[1] = state_tmp;
-
   } else {
     result = X_STATUS_INVALID_HANDLE;
   }
@@ -728,7 +786,7 @@ dword_result_t NtReleaseMutant_entry(dword_t mutant_handle, dword_t unknown) {
   auto mutant =
       kernel_state()->object_table()->LookupObject<XMutant>(mutant_handle);
   if (mutant) {
-    result = mutant->ReleaseMutant(priority_increment, abandon, wait);
+    mutant->ReleaseMutant(priority_increment, abandon, wait);
   } else {
     result = X_STATUS_INVALID_HANDLE;
   }
@@ -847,10 +905,8 @@ dword_result_t KeWaitForSingleObject_entry(lpvoid_t object_ptr,
 DECLARE_XBOXKRNL_EXPORT3(KeWaitForSingleObject, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
 
-dword_result_t NtWaitForSingleObjectEx_entry(dword_t object_handle,
-                                             dword_t wait_mode,
-                                             dword_t alertable,
-                                             lpqword_t timeout_ptr) {
+uint32_t NtWaitForSingleObjectEx(uint32_t object_handle, uint32_t wait_mode,
+                                 uint32_t alertable, uint64_t* timeout_ptr) {
   X_STATUS result = X_STATUS_SUCCESS;
 
   auto object =
@@ -864,6 +920,15 @@ dword_result_t NtWaitForSingleObjectEx_entry(dword_t object_handle,
   }
 
   return result;
+}
+
+dword_result_t NtWaitForSingleObjectEx_entry(dword_t object_handle,
+                                             dword_t wait_mode,
+                                             dword_t alertable,
+                                             lpqword_t timeout_ptr) {
+  uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
+  return NtWaitForSingleObjectEx(object_handle, wait_mode, alertable,
+                                 timeout_ptr ? &timeout : nullptr);
 }
 DECLARE_XBOXKRNL_EXPORT3(NtWaitForSingleObjectEx, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
@@ -974,11 +1039,7 @@ dword_result_t NtSignalAndWaitForSingleObjectEx_entry(dword_t signal_handle,
 DECLARE_XBOXKRNL_EXPORT3(NtSignalAndWaitForSingleObjectEx, kThreading,
                          kImplemented, kBlocking, kHighFrequency);
 
-static void PrefetchForCAS(const void* value) {
-  if (amd64::GetFeatureFlags() & amd64::kX64EmitPrefetchW) {
-    swcache::PrefetchW(value);
-  }
-}
+static void PrefetchForCAS(const void* value) { swcache::PrefetchW(value); }
 
 uint32_t xeKeKfAcquireSpinLock(uint32_t* lock, uint64_t r13 = 1) {
   // XELOGD(
@@ -1093,20 +1154,57 @@ void KeLeaveCriticalRegion_entry() {
 DECLARE_XBOXKRNL_EXPORT2(KeLeaveCriticalRegion, kThreading, kImplemented,
                          kHighFrequency);
 
-dword_result_t KeRaiseIrqlToDpcLevel_entry() {
-  auto old_value = kernel_state()->processor()->RaiseIrql(cpu::Irql::DPC);
-  return (uint32_t)old_value;
+dword_result_t KeRaiseIrqlToDpcLevel_entry(const ppc_context_t& ctx) {
+  auto pcr = ctx.GetPCR();
+  uint32_t old_irql = pcr->current_irql;
+
+  if (old_irql > 2) {
+    XELOGE("KeRaiseIrqlToDpcLevel - old_irql > 2");
+  }
+
+  pcr->current_irql = 2;
+
+  return old_irql;
 }
 DECLARE_XBOXKRNL_EXPORT2(KeRaiseIrqlToDpcLevel, kThreading, kImplemented,
                          kHighFrequency);
 
-void KfLowerIrql_entry(dword_t old_value) {
-  kernel_state()->processor()->LowerIrql(
-      static_cast<cpu::Irql>((uint32_t)old_value));
+// irql is supposed to be per thread afaik...
+void KfLowerIrql_entry(dword_t new_irql, const ppc_context_t& ctx) {
+  X_KPCR* kpcr = ctx.GetPCR();
 
-  XThread::GetCurrentThread()->CheckApcs();
+  if (new_irql > kpcr->current_irql) {
+    XELOGE("KfLowerIrql : new_irql > kpcr->current_irql!");
+  }
+  kpcr->current_irql = new_irql;
+  if (new_irql < 2) {
+    {
+      // this actually calls a function that eventually calls checkapcs.
+      // the called function does a ton of other stuff including changing the
+      // irql and interrupt_related
+      ctx.CurrentXThread()->CheckApcs();
+    }
+  }
 }
 DECLARE_XBOXKRNL_EXPORT2(KfLowerIrql, kThreading, kImplemented, kHighFrequency);
+
+// used by aurora's nova plugin
+// like the other irql related functions, writes to an unknown mmio range (
+// 0x7FFF ). The range is indexed by the low 16 bits of the KPCR's pointer (so
+// r13)
+dword_result_t KfRaiseIrql_entry(dword_t new_irql, const ppc_context_t& ctx) {
+  X_KPCR* v1 = ctx.GetPCR();
+
+  uint32_t old_irql = v1->current_irql;
+  v1->current_irql = new_irql;
+
+  if (old_irql > (unsigned int)new_irql) {
+    XELOGE("KfRaiseIrql - old_irql > new_irql!");
+  }
+  return old_irql;
+}
+
+DECLARE_XBOXKRNL_EXPORT2(KfRaiseIrql, kThreading, kImplemented, kHighFrequency);
 
 void NtQueueApcThread_entry(dword_t thread_handle, lpvoid_t apc_routine,
                             lpvoid_t apc_routine_context, lpvoid_t arg1,

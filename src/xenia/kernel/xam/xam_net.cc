@@ -177,6 +177,17 @@ dword_result_t NetDll_XNetStartup_entry(dword_t caller,
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetStartup, kNetworking, kImplemented);
 
+// https://github.com/jogolden/testdev/blob/master/xkelib/syssock.h#L46
+dword_result_t NetDll_XNetStartupEx_entry(dword_t caller,
+                                          pointer_t<XNetStartupParams> params,
+                                          dword_t versionReq) {
+  // versionReq
+  // MW3, Ghosts: 0x20501400
+
+  return NetDll_XNetStartup_entry(caller, params);
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetStartupEx, kNetworking, kImplemented);
+
 dword_result_t NetDll_XNetCleanup_entry(dword_t caller, lpvoid_t params) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   // auto xnet = xam->xnet();
@@ -267,6 +278,13 @@ dword_result_t NetDll_WSAStartup_entry(dword_t caller, word_t version,
   return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_WSAStartup, kNetworking, kImplemented);
+
+dword_result_t NetDll_WSAStartupEx_entry(dword_t caller, word_t version,
+                                         pointer_t<X_WSADATA> data_ptr,
+                                         dword_t versionReq) {
+  return NetDll_WSAStartup_entry(caller, version, data_ptr);
+}
+DECLARE_XAM_EXPORT1(NetDll_WSAStartupEx, kNetworking, kImplemented);
 
 dword_result_t NetDll_WSACleanup_entry(dword_t caller) {
   // This does nothing. Xenia needs WSA running.
@@ -770,7 +788,7 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
     return -1;
   }
 
-  return (socket->handle() & 0x00FFFFFF);
+  return socket->handle();
 }
 DECLARE_XAM_EXPORT1(NetDll_socket, kNetworking, kImplemented);
 
@@ -1145,7 +1163,9 @@ DECLARE_XAM_EXPORT1(NetDll_sendto, kNetworking, kImplemented);
 
 dword_result_t NetDll___WSAFDIsSet_entry(dword_t socket_handle,
                                          pointer_t<x_fd_set> fd_set) {
-  for (uint32_t i = 0; i < fd_set->fd_count.value; i++) {
+  const uint8_t max_fd_count =
+      std::min((uint32_t)fd_set->fd_count, uint32_t(64));
+  for (uint8_t i = 0; i < max_fd_count; i++) {
     if (fd_set->fd_array[i] == socket_handle) {
       return 1;
     }

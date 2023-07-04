@@ -7,6 +7,8 @@
  ******************************************************************************
  */
 
+#include <xenia/kernel/xboxkrnl/xboxkrnl_error.h>
+#include <xenia/kernel/xboxkrnl/xboxkrnl_modules.h>
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
@@ -15,6 +17,8 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_private.h"
+#include "xenia/kernel/xboxkrnl/xboxkrnl_memory.h"
+#include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
@@ -32,6 +36,9 @@ DECLARE_int32(user_language);
 namespace xe {
 namespace kernel {
 namespace xam {
+
+// https://github.com/tpn/winsdk-10/blob/master/Include/10.0.14393.0/km/wdm.h#L15539
+typedef enum _MODE { KernelMode, UserMode, MaximumMode } MODE;
 
 dword_result_t XamFeatureEnabled_entry(dword_t unk) { return 0; }
 DECLARE_XAM_EXPORT1(XamFeatureEnabled, kNone, kStub);
@@ -247,6 +254,203 @@ dword_result_t XGetLanguage_entry() {
 }
 DECLARE_XAM_EXPORT1(XGetLanguage, kNone, kImplemented);
 
+// http://www.noxa.org/blog/2011/02/28/building-an-xbox-360-emulator-part-3-feasibilityos/
+// http://www.noxa.org/blog/2011/08/13/building-an-xbox-360-emulator-part-5-xex-files/
+dword_result_t RtlSleep_entry(dword_t dwMilliseconds, dword_t bAlertable) {
+  LARGE_INTEGER delay{};
+
+  // Convert the delay time to 100-nanosecond intervals
+  delay.QuadPart = dwMilliseconds == -1
+                       ? LLONG_MAX
+                       : static_cast<LONGLONG>(-10000) * dwMilliseconds;
+
+  X_STATUS result = xboxkrnl::KeDelayExecutionThread(MODE::UserMode, bAlertable,
+                                                     (uint64_t*)&delay);
+
+  // If the delay was interrupted by an APC, keep delaying the thread
+  while (bAlertable && result == X_STATUS_ALERTED) {
+    result = xboxkrnl::KeDelayExecutionThread(MODE::UserMode, bAlertable,
+                                              (uint64_t*)&delay);
+  }
+
+  return result == X_STATUS_SUCCESS ? X_STATUS_SUCCESS : X_STATUS_USER_APC;
+}
+DECLARE_XAM_EXPORT1(RtlSleep, kNone, kImplemented);
+
+dword_result_t SleepEx_entry(dword_t dwMilliseconds, dword_t bAlertable) {
+  return RtlSleep_entry(dwMilliseconds, bAlertable);
+}
+DECLARE_XAM_EXPORT1(SleepEx, kNone, kImplemented);
+
+// https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleep
+void Sleep_entry(dword_t dwMilliseconds) {
+  RtlSleep_entry(dwMilliseconds, FALSE);
+}
+DECLARE_XAM_EXPORT1(Sleep, kNone, kImplemented);
+
+// https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-gettickcount
+dword_result_t GetTickCount_entry() { return Clock::QueryGuestUptimeMillis(); }
+DECLARE_XAM_EXPORT1(GetTickCount, kNone, kImplemented);
+
+dword_result_t XamGetCurrentTitleId_entry() {
+  return kernel_state()->emulator()->title_id();
+}
+DECLARE_XAM_EXPORT1(XamGetCurrentTitleId, kNone, kImplemented);
+
+dword_result_t RtlSetLastNTError_entry(dword_t error_code) {
+  const uint32_t result =
+      xe::kernel::xboxkrnl::xeRtlNtStatusToDosError(error_code);
+  XThread::SetLastError(result);
+
+  return result;
+}
+DECLARE_XAM_EXPORT1(RtlSetLastNTError, kNone, kImplemented);
+
+dword_result_t RtlGetLastError_entry() { return XThread::GetLastError(); }
+DECLARE_XAM_EXPORT1(RtlGetLastError, kNone, kImplemented);
+
+dword_result_t GetLastError_entry() { return RtlGetLastError_entry(); }
+DECLARE_XAM_EXPORT1(GetLastError, kNone, kImplemented);
+
+dword_result_t GetModuleHandleA_entry(lpstring_t module_name) {
+  xe::be<uint32_t> module_ptr = 0;
+  const X_STATUS error_code = xe::kernel::xboxkrnl::XexGetModuleHandle(
+      module_name.value(), &module_ptr);
+
+  if (XFAILED(error_code)) {
+    RtlSetLastNTError_entry(error_code);
+
+    return NULL;
+  }
+
+  return (uint32_t)module_ptr;
+}
+DECLARE_XAM_EXPORT1(GetModuleHandleA, kNone, kImplemented);
+
+dword_result_t XapipCreateThread_entry(lpdword_t lpThreadAttributes,
+                                       dword_t dwStackSize,
+                                       lpvoid_t lpStartAddress,
+                                       lpvoid_t lpParameter,
+                                       dword_t dwCreationFlags, dword_t unkn,
+                                       lpdword_t lpThreadId) {
+  uint32_t flags = (dwCreationFlags >> 2) & 1;
+
+  if (unkn != -1) {
+    flags |= 1 << unkn << 24;
+  }
+
+  xe::be<uint32_t> result = 0;
+
+  const X_STATUS error_code = xe::kernel::xboxkrnl::ExCreateThread(
+      &result, dwStackSize, lpThreadId, lpStartAddress, lpParameter, 0, flags);
+
+  if (XFAILED(error_code)) {
+    RtlSetLastNTError_entry(error_code);
+
+    return NULL;
+  }
+
+  return (uint32_t)result;
+}
+DECLARE_XAM_EXPORT1(XapipCreateThread, kNone, kImplemented);
+
+dword_result_t CreateThread_entry(lpdword_t lpThreadAttributes,
+                                  dword_t dwStackSize, lpvoid_t lpStartAddress,
+                                  lpvoid_t lpParameter, dword_t dwCreationFlags,
+                                  lpdword_t lpThreadId) {
+  return XapipCreateThread_entry(lpThreadAttributes, dwStackSize,
+                                 lpStartAddress, lpParameter, dwCreationFlags,
+                                 -1, lpThreadId);
+}
+DECLARE_XAM_EXPORT1(CreateThread, kNone, kImplemented);
+
+dword_result_t CloseHandle_entry(dword_t hObject) {
+  const X_STATUS error_code = xe::kernel::xboxkrnl::NtClose(hObject);
+
+  if (XFAILED(error_code)) {
+    RtlSetLastNTError_entry(error_code);
+
+    return false;
+  }
+
+  return true;
+}
+DECLARE_XAM_EXPORT1(CloseHandle, kNone, kImplemented);
+
+dword_result_t ResumeThread_entry(dword_t hThread) {
+  uint32_t suspend_count;
+  const X_STATUS error_code =
+      xe::kernel::xboxkrnl::NtResumeThread(hThread, &suspend_count);
+
+  if (XFAILED(error_code)) {
+    RtlSetLastNTError_entry(error_code);
+
+    return -1;
+  }
+
+  return suspend_count;
+}
+DECLARE_XAM_EXPORT1(ResumeThread, kNone, kImplemented);
+
+void ExitThread_entry(dword_t exit_code) {
+  xe::kernel::xboxkrnl::ExTerminateThread(exit_code);
+}
+DECLARE_XAM_EXPORT1(ExitThread, kNone, kImplemented);
+
+dword_result_t GetCurrentThreadId_entry() {
+  return XThread::GetCurrentThread()->GetCurrentThreadId();
+}
+DECLARE_XAM_EXPORT1(GetCurrentThreadId, kNone, kImplemented);
+
+qword_result_t XapiFormatTimeOut_entry(lpqword_t result,
+                                       dword_t dwMilliseconds) {
+  LARGE_INTEGER delay{};
+
+  // Convert the delay time to 100-nanosecond intervals
+  delay.QuadPart =
+      dwMilliseconds == -1 ? 0 : static_cast<LONGLONG>(-10000) * dwMilliseconds;
+
+  return (uint64_t)&delay;
+}
+DECLARE_XAM_EXPORT1(XapiFormatTimeOut, kNone, kImplemented);
+
+dword_result_t WaitForSingleObjectEx_entry(dword_t hHandle,
+                                           dword_t dwMilliseconds,
+                                           dword_t bAlertable) {
+  uint64_t* timeout = nullptr;
+  uint64_t timeout_ptr = XapiFormatTimeOut_entry(timeout, dwMilliseconds);
+
+  X_STATUS result = xe::kernel::xboxkrnl::NtWaitForSingleObjectEx(
+      hHandle, 1, bAlertable, &timeout_ptr);
+
+  while (bAlertable && result == X_STATUS_ALERTED) {
+    result = xe::kernel::xboxkrnl::NtWaitForSingleObjectEx(
+        hHandle, 1, bAlertable, &timeout_ptr);
+  }
+
+  RtlSetLastNTError_entry(result);
+  result = -1;
+
+  return result;
+}
+DECLARE_XAM_EXPORT1(WaitForSingleObjectEx, kNone, kImplemented);
+
+dword_result_t WaitForSingleObject_entry(dword_t hHandle,
+                                         dword_t dwMilliseconds) {
+  return WaitForSingleObjectEx_entry(hHandle, dwMilliseconds, 0);
+}
+DECLARE_XAM_EXPORT1(WaitForSingleObject, kNone, kImplemented);
+
+dword_result_t lstrlenW_entry(lpu16string_t string) {
+  // wcslen?
+  if (string) {
+    return (uint32_t)string.value().length();
+  }
+
+  return NULL;
+}
+DECLARE_XAM_EXPORT1(lstrlenW, kNone, kImplemented);
+
 dword_result_t XamGetExecutionId_entry(lpdword_t info_ptr) {
   auto module = kernel_state()->GetExecutableModule();
   assert_not_null(module);
@@ -341,7 +545,8 @@ void XamLoaderTerminateTitle_entry() {
 }
 DECLARE_XAM_EXPORT1(XamLoaderTerminateTitle, kNone, kSketchy);
 
-dword_result_t XamAlloc_entry(dword_t flags, dword_t size, lpdword_t out_ptr) {
+uint32_t XamAllocImpl(uint32_t flags, uint32_t size,
+                      xe::be<uint32_t>* out_ptr) {
   if (flags & 0x00100000) {  // HEAP_ZERO_memory used unless this flag
     // do nothing!
     // maybe we ought to fill it with nonzero garbage, but otherwise this is a
@@ -350,13 +555,47 @@ dword_result_t XamAlloc_entry(dword_t flags, dword_t size, lpdword_t out_ptr) {
 
   // Allocate from the heap. Not sure why XAM does this specially, perhaps
   // it keeps stuff in a separate heap?
-  //chrispy: there is a set of different heaps it uses, an array of them. the top 4 bits of the 32 bit flags seems to select the heap
+  // chrispy: there is a set of different heaps it uses, an array of them. the
+  // top 4 bits of the 32 bit flags seems to select the heap
   uint32_t ptr = kernel_state()->memory()->SystemHeapAlloc(size);
   *out_ptr = ptr;
 
   return X_ERROR_SUCCESS;
 }
+
+dword_result_t XamAlloc_entry(dword_t flags, dword_t size, lpdword_t out_ptr) {
+  return XamAllocImpl(flags, size, out_ptr);
+}
 DECLARE_XAM_EXPORT1(XamAlloc, kMemory, kImplemented);
+
+static const unsigned short XamPhysicalProtTable[4] = {
+    X_PAGE_READONLY, X_PAGE_READWRITE | X_PAGE_NOCACHE, X_PAGE_READWRITE,
+    X_PAGE_WRITECOMBINE | X_PAGE_READWRITE};
+
+dword_result_t XamAllocEx_entry(dword_t phys_flags, dword_t flags, dword_t size,
+                                lpdword_t out_ptr, const ppc_context_t& ctx) {
+  if ((flags & 0x40000000) == 0) {
+    return XamAllocImpl(flags, size, out_ptr);
+  }
+
+  uint32_t flags_remapped = phys_flags;
+  if ((phys_flags & 0xF000000) == 0) {
+    // setting default alignment
+    flags_remapped = 0xC000000 | phys_flags & 0xF0FFFFFF;
+  }
+
+  uint32_t result = xboxkrnl::xeMmAllocatePhysicalMemoryEx(
+      2, size, XamPhysicalProtTable[(flags_remapped >> 28) & 0b11], 0,
+      0xFFFFFFFF, 1 << ((flags_remapped >> 24) & 0xF));
+
+  if (result && (flags_remapped & 0x40000000) != 0) {
+    memset(ctx->TranslateVirtual<uint8_t*>(result), 0, size);
+  }
+
+  *out_ptr = result;
+  return result ? 0 : 0x8007000E;
+}
+DECLARE_XAM_EXPORT1(XamAllocEx, kMemory, kImplemented);
 
 dword_result_t XamFree_entry(lpdword_t ptr) {
   kernel_state()->memory()->SystemHeapFree(ptr.guest_address());
@@ -371,6 +610,11 @@ dword_result_t XamQueryLiveHiveW_entry(lpu16string_t name, lpvoid_t out_buf,
   return X_STATUS_INVALID_PARAMETER_1;
 }
 DECLARE_XAM_EXPORT1(XamQueryLiveHiveW, kNone, kStub);
+
+dword_result_t XamIsCurrentTitleDash_entry(const ppc_context_t& ctx) {
+  return ctx->kernel_state->title_id() == 0xFFFE07D1;
+}
+DECLARE_XAM_EXPORT1(XamIsCurrentTitleDash, kNone, kImplemented);
 
 }  // namespace xam
 }  // namespace kernel

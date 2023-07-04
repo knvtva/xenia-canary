@@ -52,8 +52,8 @@ KernelState::KernelState(Emulator* emulator)
   file_system_ = emulator->file_system();
 
   app_manager_ = std::make_unique<xam::AppManager>();
-  user_profiles_.emplace(
-      0, std::make_unique<xam::UserProfile>(0, emulator->profile_root()));
+  achievement_manager_ = std::make_unique<AchievementManager>();
+  user_profiles_.emplace(0, std::make_unique<xam::UserProfile>(0, emulator->profile_root()));
 
   auto content_root = emulator_->content_root();
   if (!content_root.empty()) {
@@ -66,6 +66,14 @@ KernelState::KernelState(Emulator* emulator)
 
   // Hardcoded maximum of 2048 TLS slots.
   tls_bitmap_.Resize(2048);
+
+  auto hc_loc_heap = memory_->LookupHeap(strange_hardcoded_page_);
+  bool fixed_alloc_worked = hc_loc_heap->AllocFixed(
+      strange_hardcoded_page_, 65536, 0,
+      kMemoryAllocationCommit | kMemoryAllocationReserve,
+      kMemoryProtectRead | kMemoryProtectWrite);
+
+  xenia_assert(fixed_alloc_worked);
 
   xam::AppManager::RegisterApps(this, app_manager_.get());
 }
@@ -108,6 +116,26 @@ uint32_t KernelState::title_id() const {
   return 0;
 }
 
+util::XdbfGameData KernelState::title_xdbf() const {
+  return module_xdbf(executable_module_);
+}
+
+util::XdbfGameData KernelState::module_xdbf(
+    object_ref<UserModule> exec_module) const {
+  assert_not_null(exec_module);
+
+  uint32_t resource_data = 0;
+  uint32_t resource_size = 0;
+  if (XSUCCEEDED(exec_module->GetSection(
+          fmt::format("{:08X}", exec_module->title_id()).c_str(),
+          &resource_data, &resource_size))) {
+    util::XdbfGameData db(memory()->TranslateVirtual(resource_data),
+                          resource_size);
+    return db;
+  }
+  return util::XdbfGameData(nullptr, resource_size);
+}
+
 uint32_t KernelState::process_type() const {
   auto pib =
       memory_->TranslateVirtual<ProcessInfoBlock*>(process_info_block_address_);
@@ -122,7 +150,17 @@ void KernelState::set_process_type(uint32_t value) {
 
 uint32_t KernelState::AllocateTLS() { return uint32_t(tls_bitmap_.Acquire()); }
 
-void KernelState::FreeTLS(uint32_t slot) { tls_bitmap_.Release(slot); }
+void KernelState::FreeTLS(uint32_t slot) {
+  const std::vector<object_ref<XThread>> threads =
+      object_table()->GetObjectsByType<XThread>();
+
+  for (const object_ref<XThread>& thread : threads) {
+    if (thread->is_guest_thread()) {
+      thread->SetTLSValue(slot, 0);
+    }
+  }
+  tls_bitmap_.Release(slot);
+}
 
 void KernelState::RegisterTitleTerminateNotification(uint32_t routine,
                                                      uint32_t priority) {
@@ -464,10 +502,13 @@ X_RESULT KernelState::ApplyTitleUpdate(const object_ref<UserModule> module) {
   X_RESULT open_status =
       content_manager()->OpenContent("UPDATE", title_update, disc_number);
 
+  // Use the corresponding patch for the launch module
+  std::filesystem::path patch_xexp = fmt::format("{0}.xexp", module->name());
+
   std::string resolved_path = "";
   file_system()->FindSymbolicLink("UPDATE:", resolved_path);
   xe::vfs::Entry* patch_entry = kernel_state()->file_system()->ResolvePath(
-      resolved_path + "default.xexp");
+      resolved_path + patch_xexp.generic_string());
 
   if (patch_entry) {
     const std::string patch_path = patch_entry->absolute_path();
@@ -813,10 +854,11 @@ void KernelState::CompleteOverlappedDeferredEx(
   XOverlappedSetContext(ptr, XThread::GetCurrentThreadHandle());
   X_HANDLE event_handle = XOverlappedGetEvent(ptr);
   if (event_handle) {
-    auto ev = object_table()->LookupObject<XEvent>(event_handle);
+    auto ev = object_table()->LookupObject<XObject>(event_handle);
+
     assert_not_null(ev);
-    if (ev) {
-      ev->Reset();
+    if (ev && ev->type() == XObject::Type::Event) {
+      ev.get<XEvent>()->Reset();
     }
   }
   auto global_lock = global_critical_region_.Acquire();
@@ -905,6 +947,55 @@ bool KernelState::Save(ByteStream* stream) {
 
   *num_objects_ptr = static_cast<uint32_t>(num_objects);
   return true;
+}
+
+// this only gets triggered once per ms at most, so fields other than tick count
+// will probably not be updated in a timely manner for guest code that uses them
+void KernelState::UpdateKeTimestampBundle() {
+  X_TIME_STAMP_BUNDLE* lpKeTimeStampBundle =
+      memory_->TranslateVirtual<X_TIME_STAMP_BUNDLE*>(ke_timestamp_bundle_ptr_);
+  uint32_t uptime_ms = Clock::QueryGuestUptimeMillis();
+  xe::store_and_swap<uint64_t>(&lpKeTimeStampBundle->interrupt_time,
+                               Clock::QueryGuestInterruptTime());
+  xe::store_and_swap<uint64_t>(&lpKeTimeStampBundle->system_time,
+                               Clock::QueryGuestSystemTime());
+  xe::store_and_swap<uint32_t>(&lpKeTimeStampBundle->tick_count, uptime_ms);
+}
+
+uint32_t KernelState::GetKeTimestampBundle() {
+  XE_LIKELY_IF(ke_timestamp_bundle_ptr_) { return ke_timestamp_bundle_ptr_; }
+  else {
+    global_critical_region::PrepareToAcquire();
+    return CreateKeTimestampBundle();
+  }
+}
+
+XE_NOINLINE
+XE_COLD
+uint32_t KernelState::CreateKeTimestampBundle() {
+  auto crit = global_critical_region::Acquire();
+
+  uint32_t pKeTimeStampBundle =
+      memory_->SystemHeapAlloc(sizeof(X_TIME_STAMP_BUNDLE));
+  X_TIME_STAMP_BUNDLE* lpKeTimeStampBundle =
+      memory_->TranslateVirtual<X_TIME_STAMP_BUNDLE*>(pKeTimeStampBundle);
+
+  xe::store_and_swap<uint64_t>(&lpKeTimeStampBundle->interrupt_time,
+                               Clock::QueryGuestInterruptTime());
+
+  xe::store_and_swap<uint64_t>(&lpKeTimeStampBundle->system_time,
+                               Clock::QueryGuestSystemTime());
+
+  xe::store_and_swap<uint32_t>(&lpKeTimeStampBundle->tick_count,
+                               Clock::QueryGuestUptimeMillis());
+
+  xe::store_and_swap<uint32_t>(&lpKeTimeStampBundle->padding, 0);
+
+  timestamp_timer_ = xe::threading::HighResolutionTimer::CreateRepeating(
+      std::chrono::milliseconds(1),
+      [this]() { this->UpdateKeTimestampBundle(); });
+  ke_timestamp_bundle_ptr_ = pKeTimeStampBundle;
+  return pKeTimeStampBundle;
 }
 
 bool KernelState::Restore(ByteStream* stream) {

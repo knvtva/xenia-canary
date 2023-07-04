@@ -20,6 +20,8 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
+DECLARE_int32(user_language);
+
 namespace xe {
 namespace kernel {
 namespace xam {
@@ -818,22 +820,27 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
     return result;
   }
 
-  std::vector<xdbf::Achievement> achievements;
-  game_gpd->GetAchievements(&achievements);
+  const util::XdbfGameData db = kernel_state()->title_xdbf();
 
-  auto i = 0;
-  for (auto ach : achievements) {
-    auto item = XStaticAchievementEnumerator::AchievementDetails{
-        ach.id,  // dummy achievement id
-        fmt::format(u"Dummy {}", ach.id),
-        u"Dummy description",
-        u"Dummy unachieved",
-        ach.image_id,  // dummy image id
-        ach.gamerscore,
-        ach.unlock_time,
-        ach.flags};
-    e->AppendItem(item);
-    i++;
+  if (db.is_valid()) {
+    const XLanguage language =
+        db.GetExistingLanguage(static_cast<XLanguage>(cvars::user_language));
+    const std::vector<util::XdbfAchievementTableEntry> achievement_list =
+        db.GetAchievements();
+
+    for (const util::XdbfAchievementTableEntry& entry : achievement_list) {
+      auto item = XStaticAchievementEnumerator::AchievementDetails{
+          entry.id,
+          xe::to_utf16(db.GetStringTableEntry(language, entry.label_id)),
+          xe::to_utf16(db.GetStringTableEntry(language, entry.description_id)),
+          xe::to_utf16(db.GetStringTableEntry(language, entry.unachieved_id)),
+          entry.image_id,
+          entry.gamerscore,
+          {0, 0},
+          entry.flags};
+
+      e->AppendItem(item);
+    }
   }
 
   XELOGD("XamUserCreateAchievementEnumerator: added %d items to enumerator", i);
@@ -903,6 +910,28 @@ dword_result_t XamSessionRefObjByHandle_entry(dword_t handle,
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSessionRefObjByHandle, kUserProfiles, kStub);
+
+dword_result_t XamUserIsUnsafeProgrammingAllowed_entry(dword_t unk1, dword_t unk2,
+                                                       lpdword_t unk3, dword_t unk4,
+                                                       dword_t unk5, dword_t unk6) {
+  if (!unk3 || unk1 != 255 && unk1 >= 4) {
+    return 87;
+  }
+  *unk3 = 1;
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XamUserIsUnsafeProgrammingAllowed, kUserProfiles, kStub);
+
+dword_result_t XamUserGetSubscriptionType_entry(dword_t user_index, dword_t unk2,
+                                                dword_t unk3, dword_t unk4,
+                                                dword_t unk5, dword_t unk6) {
+  if (!unk2 || !unk3 || user_index > 4) {
+    return 0x80070057;
+  }
+
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XamUserGetSubscriptionType, kUserProfiles, kStub);
 
 }  // namespace xam
 }  // namespace kernel

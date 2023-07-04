@@ -18,8 +18,23 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/ui/imgui_dialog.h"
+#include "xenia/ui/imgui_notification.h"
+#include "xenia/ui/resources.h"
 #include "xenia/ui/ui_event.h"
 #include "xenia/ui/window.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "third_party/stb/stb_image.h"
+
+#if XE_PLATFORM_WIN32
+#include <ShlObj_core.h>
+#endif
+
+DEFINE_path(
+    custom_font_path, "",
+    "Allows user to load custom font and use it instead of default one.", "UI");
+
+DEFINE_uint32(font_size, 12, "Allows user to set custom font size.", "UI");
 
 namespace xe {
 namespace ui {
@@ -62,11 +77,11 @@ void ImGuiDrawer::AddDialog(ImGuiDialog* dialog) {
       dialogs_.cend()) {
     return;
   }
-  if (dialog_loop_next_index_ == SIZE_MAX && dialogs_.empty()) {
-    // First dialog added. dialog_loop_next_index_ == SIZE_MAX is also checked
-    // because in a situation of removing the only dialog, then adding a dialog,
-    // from within a dialog's Draw function, the removal would not cause the
-    // listener and the drawer to be removed (it's deferred in this case).
+  if (dialogs_.empty() && !IsDrawingDialogs()) {
+    // First dialog added. !IsDrawingDialogs() is also checked because in a
+    // situation of removing the only dialog, then adding a dialog, from within
+    // a dialog's Draw function, re-registering the ImGuiDrawer may result in
+    // ImGui being drawn multiple times in the current frame.
     window_->AddInputListener(this, z_order_);
     if (presenter_) {
       presenter_->AddUIDrawerFromUIThread(this, z_order_);
@@ -81,7 +96,7 @@ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
   if (it == dialogs_.cend()) {
     return;
   }
-  if (dialog_loop_next_index_ != SIZE_MAX) {
+  if (IsDrawingDialogs()) {
     // Actualize the next dialog index after the erasure from the vector.
     size_t existing_index = size_t(std::distance(dialogs_.cbegin(), it));
     if (dialog_loop_next_index_ > existing_index) {
@@ -89,17 +104,32 @@ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
     }
   }
   dialogs_.erase(it);
-  if (dialog_loop_next_index_ == SIZE_MAX && dialogs_.empty()) {
-    if (presenter_) {
-      presenter_->RemoveUIDrawerFromUIThread(this);
-    }
-    window_->RemoveInputListener(this);
-    // Clear all input since no input will be received anymore, and when the
-    // drawer becomes active again, it'd have an outdated input state otherwise
-    // which will be persistent until new events actualize individual input
-    // properties.
-    ClearInput();
+  DetachIfLastWindowRemoved();
+}
+
+void ImGuiDrawer::AddNotification(ImGuiNotification* dialog) {
+  assert_not_null(dialog);
+  // Check if already added.
+  if (std::find(notifications_.cbegin(), notifications_.cend(), dialog) !=
+      notifications_.cend()) {
+    return;
   }
+  if (notifications_.empty()) {
+    if (presenter_) {
+      presenter_->AddUIDrawerFromUIThread(this, z_order_);
+    }
+  }
+  notifications_.push_back(dialog);
+}
+
+void ImGuiDrawer::RemoveNotification(ImGuiNotification* dialog) {
+  assert_not_null(dialog);
+  auto it = std::find(notifications_.cbegin(), notifications_.cend(), dialog);
+  if (it == notifications_.cend()) {
+    return;
+  }
+  notifications_.erase(it);
+  DetachIfLastWindowRemoved();
 }
 
 void ImGuiDrawer::Initialize() {
@@ -108,38 +138,7 @@ void ImGuiDrawer::Initialize() {
   internal_state_ = ImGui::CreateContext();
   ImGui::SetCurrentContext(internal_state_);
 
-  auto& io = ImGui::GetIO();
-
-  // TODO(gibbed): disable imgui.ini saving for now,
-  // imgui assumes paths are char* so we can't throw a good path at it on
-  // Windows.
-  io.IniFilename = nullptr;
-
-  // Setup the font glyphs.
-  ImFontConfig font_config;
-  font_config.OversampleH = font_config.OversampleV = 1;
-  font_config.PixelSnapH = true;
-  static const ImWchar font_glyph_ranges[] = {
-      0x0020,
-      0x00FF,  // Basic Latin + Latin Supplement
-      0,
-  };
-  io.Fonts->AddFontFromMemoryCompressedBase85TTF(
-      kProggyTinyCompressedDataBase85, 10.0f, &font_config, font_glyph_ranges);
-  // TODO(benvanik): jp font on other platforms?
-  // https://github.com/Koruri/kibitaki looks really good, but is 1.5MiB.
-  const char* jp_font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
-  if (std::filesystem::exists(jp_font_path)) {
-    ImFontConfig jp_font_config;
-    jp_font_config.MergeMode = true;
-    jp_font_config.OversampleH = jp_font_config.OversampleV = 1;
-    jp_font_config.PixelSnapH = true;
-    jp_font_config.FontNo = 0;
-    io.Fonts->AddFontFromFileTTF(jp_font_path, 12.0f, &jp_font_config,
-                                 io.Fonts->GetGlyphRangesJapanese());
-  } else {
-    XELOGW("Unable to load Japanese font; JP characters will be boxes");
-  }
+  InitializeFonts();
 
   auto& style = ImGui::GetStyle();
   style.ScrollbarRounding = 0;
@@ -194,29 +193,185 @@ void ImGuiDrawer::Initialize() {
   style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.00f, 1.00f, 0.00f, 0.21f);
   style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.35f);
 
-  io.KeyMap[ImGuiKey_Tab] = int(ui::VirtualKey::kTab);
-  io.KeyMap[ImGuiKey_LeftArrow] = int(ui::VirtualKey::kLeft);
-  io.KeyMap[ImGuiKey_RightArrow] = int(ui::VirtualKey::kRight);
-  io.KeyMap[ImGuiKey_UpArrow] = int(ui::VirtualKey::kUp);
-  io.KeyMap[ImGuiKey_DownArrow] = int(ui::VirtualKey::kDown);
-  io.KeyMap[ImGuiKey_Home] = int(ui::VirtualKey::kHome);
-  io.KeyMap[ImGuiKey_End] = int(ui::VirtualKey::kEnd);
-  io.KeyMap[ImGuiKey_Delete] = int(ui::VirtualKey::kDelete);
-  io.KeyMap[ImGuiKey_Backspace] = int(ui::VirtualKey::kBack);
-  io.KeyMap[ImGuiKey_Enter] = int(ui::VirtualKey::kReturn);
-  io.KeyMap[ImGuiKey_Escape] = int(ui::VirtualKey::kEscape);
-  io.KeyMap[ImGuiKey_A] = int(ui::VirtualKey::kA);
-  io.KeyMap[ImGuiKey_C] = int(ui::VirtualKey::kC);
-  io.KeyMap[ImGuiKey_V] = int(ui::VirtualKey::kV);
-  io.KeyMap[ImGuiKey_X] = int(ui::VirtualKey::kX);
-  io.KeyMap[ImGuiKey_Y] = int(ui::VirtualKey::kY);
-  io.KeyMap[ImGuiKey_Z] = int(ui::VirtualKey::kZ);
-
   frame_time_tick_frequency_ = double(Clock::QueryHostTickFrequency());
   last_frame_time_ticks_ = Clock::QueryHostTickCount();
 
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
   reset_mouse_position_after_next_frame_ = false;
+}
+
+std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
+  static const std::map<VirtualKey, ImGuiKey> map = {
+      {ui::VirtualKey::kTab, ImGuiKey_Tab},
+      {ui::VirtualKey::kLeft, ImGuiKey_LeftArrow},
+      {ui::VirtualKey::kRight, ImGuiKey_RightArrow},
+      {ui::VirtualKey::kUp, ImGuiKey_UpArrow},
+      {ui::VirtualKey::kDown, ImGuiKey_DownArrow},
+      {ui::VirtualKey::kHome, ImGuiKey_Home},
+      {ui::VirtualKey::kEnd, ImGuiKey_End},
+      {ui::VirtualKey::kDelete, ImGuiKey_Delete},
+      {ui::VirtualKey::kBack, ImGuiKey_Backspace},
+      {ui::VirtualKey::kReturn, ImGuiKey_Enter},
+      {ui::VirtualKey::kEscape, ImGuiKey_Escape},
+      {ui::VirtualKey::kA, ImGuiKey_A},
+      {ui::VirtualKey::kC, ImGuiKey_C},
+      {ui::VirtualKey::kV, ImGuiKey_V},
+      {ui::VirtualKey::kX, ImGuiKey_X},
+      {ui::VirtualKey::kY, ImGuiKey_Y},
+      {ui::VirtualKey::kZ, ImGuiKey_Z},
+  };
+  if (auto search = map.find(vkey); search != map.end()) {
+    return search->second;
+  } else {
+    return std::nullopt;
+  }
+}
+
+void ImGuiDrawer::SetupNotificationTextures() {
+  if (!immediate_drawer_) {
+    return;
+  }
+
+  ImGuiIO& io = GetIO();
+
+  // We're including 4th to include all visible
+  for (uint8_t i = 0; i <= 4; i++) {
+    if (notification_icons.size() < i) {
+      break;
+    }
+
+    unsigned char* image_data;
+    int width, height, channels;
+    const auto user_icon = notification_icons.at(i);
+    image_data =
+        stbi_load_from_memory(user_icon.first, user_icon.second, &width,
+                              &height, &channels, STBI_rgb_alpha);
+    notification_icon_textures_.push_back(immediate_drawer_->CreateTexture(
+        width, height, ImmediateTextureFilter::kLinear, true,
+        reinterpret_cast<uint8_t*>(image_data)));
+  }
+}
+
+static const ImWchar font_glyph_ranges[] = {
+    0x0020, 0x00FF,  // Basic Latin + Latin Supplement
+    0x0370, 0x03FF,  // Greek
+    0x0400, 0x044F,  // Cyrillic
+    0x2000, 0x206F,  // General Punctuation
+    0,
+};
+
+bool ImGuiDrawer::LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config,
+                                 float font_size) {
+  if (cvars::custom_font_path.empty()) {
+    return false;
+  }
+
+  if (!std::filesystem::exists(cvars::custom_font_path)) {
+    return false;
+  }
+
+  const std::string font_path = xe::path_to_utf8(cvars::custom_font_path);
+  ImFont* font = io.Fonts->AddFontFromFileTTF(font_path.c_str(), font_size,
+                                              &font_config, font_glyph_ranges);
+
+  io.Fonts->Build();
+
+  if (!font->IsLoaded()) {
+    XELOGE("Failed to load custom font: {}", font_path);
+    io.Fonts->Clear();
+    return false;
+  }
+  return true;
+}
+
+bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
+                                  float font_size) {
+#if XE_PLATFORM_WIN32
+  PWSTR fonts_dir;
+  HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
+  if (FAILED(result)) {
+    CoTaskMemFree(static_cast<void*>(fonts_dir));
+    XELOGW("Unable to find Windows fonts directory");
+    return false;
+  }
+
+  std::filesystem::path font_path = std::wstring(fonts_dir);
+  font_path.append("tahoma.ttf");
+  if (!std::filesystem::exists(font_path)) {
+    return false;
+  }
+
+  ImFont* font =
+      io.Fonts->AddFontFromFileTTF(xe::path_to_utf8(font_path).c_str(),
+                                   font_size, &font_config, font_glyph_ranges);
+
+  io.Fonts->Build();
+  // Something went wrong while loading custom font. Probably corrupted.
+  if (!font->IsLoaded()) {
+    XELOGE("Failed to load custom font: {}", xe::path_to_utf8(font_path));
+    io.Fonts->Clear();
+  }
+  CoTaskMemFree(static_cast<void*>(fonts_dir));
+  return true;
+#endif
+  return false;
+}
+
+bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
+  // TODO(benvanik): jp font on other platforms?
+#if XE_PLATFORM_WIN32
+  PWSTR fonts_dir;
+  HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
+  if (FAILED(result)) {
+    XELOGW("Unable to find Windows fonts directory");
+    return false;
+  }
+
+  std::filesystem::path jp_font_path = std::wstring(fonts_dir);
+  jp_font_path.append("msgothic.ttc");
+  if (std::filesystem::exists(jp_font_path)) {
+    ImFontConfig jp_font_config;
+    jp_font_config.MergeMode = true;
+    jp_font_config.OversampleH = jp_font_config.OversampleV = 2;
+    jp_font_config.PixelSnapH = true;
+    jp_font_config.FontNo = 0;
+    io.Fonts->AddFontFromFileTTF(xe::path_to_utf8(jp_font_path).c_str(),
+                                 font_size, &jp_font_config,
+                                 io.Fonts->GetGlyphRangesJapanese());
+  } else {
+    XELOGW("Unable to load Japanese font; JP characters will be boxes");
+  }
+  CoTaskMemFree(static_cast<void*>(fonts_dir));
+  return true;
+#endif
+  return false;
+};
+
+void ImGuiDrawer::InitializeFonts() {
+  auto& io = ImGui::GetIO();
+
+  const float font_size = std::max((float)cvars::font_size, 8.f);
+  // TODO(gibbed): disable imgui.ini saving for now,
+  // imgui assumes paths are char* so we can't throw a good path at it on
+  // Windows.
+  io.IniFilename = nullptr;
+
+  ImFontConfig font_config;
+  font_config.OversampleH = font_config.OversampleV = 2;
+  font_config.PixelSnapH = true;
+
+  bool is_font_loaded = LoadCustomFont(io, font_config, font_size);
+  if (!is_font_loaded) {
+    is_font_loaded = LoadWindowsFont(io, font_config, font_size);
+  }
+
+  if (io.Fonts->Fonts.empty()) {
+    io.Fonts->AddFontFromMemoryCompressedBase85TTF(
+        kProggyTinyCompressedDataBase85, font_size, &font_config,
+        io.Fonts->GetGlyphRangesDefault());
+  }
+
+  LoadJapaneseFont(io, font_size);
 }
 
 void ImGuiDrawer::SetupFontTexture() {
@@ -258,10 +413,13 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
   if (immediate_drawer_) {
     GetIO().Fonts->TexID = static_cast<ImTextureID>(nullptr);
     font_texture_.reset();
+
+    notification_icon_textures_.clear();
   }
   immediate_drawer_ = new_immediate_drawer;
   if (immediate_drawer_) {
     SetupFontTexture();
+    SetupNotificationTextures();
   }
 }
 
@@ -274,7 +432,7 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
     return;
   }
 
-  if (dialogs_.empty()) {
+  if (dialogs_.empty() && notifications_.empty()) {
     return;
   }
 
@@ -301,12 +459,17 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
 
   ImGui::NewFrame();
 
-  assert_true(dialog_loop_next_index_ == SIZE_MAX);
+  assert_true(!IsDrawingDialogs());
   dialog_loop_next_index_ = 0;
   while (dialog_loop_next_index_ < dialogs_.size()) {
     dialogs_[dialog_loop_next_index_++]->Draw();
   }
   dialog_loop_next_index_ = SIZE_MAX;
+
+  if (!notifications_.empty()) {
+    // We only care about drawing next notification.
+    notifications_.at(0)->Draw();
+  }
 
   ImGui::Render();
   ImDrawData* draw_data = ImGui::GetDrawData();
@@ -319,13 +482,21 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
     io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
   }
 
-  if (dialogs_.empty()) {
-    // All dialogs have removed themselves during the draw, detach.
-    presenter_->RemoveUIDrawerFromUIThread(this);
-    window_->RemoveInputListener(this);
-  } else {
+  // Detaching is deferred if the last dialog is removed during drawing, perform
+  // it now if needed.
+  DetachIfLastWindowRemoved();
+
+  if (!dialogs_.empty() || !notifications_.empty()) {
     // Repaint (and handle input) continuously if still active.
     presenter_->RequestUIPaintFromUIThread();
+  }
+}
+
+void ImGuiDrawer::ClearDialogs() {
+  size_t dialog_loop = 0;
+
+  while (dialog_loop < dialogs_.size()) {
+    RemoveDialog(dialogs_[dialog_loop++]);
   }
 }
 
@@ -346,14 +517,13 @@ void ImGuiDrawer::RenderDrawLists(ImDrawData* data,
     batch.index_count = cmd_list->IdxBuffer.size();
     immediate_drawer_->BeginDrawBatch(batch);
 
-    int index_offset = 0;
     for (int j = 0; j < cmd_list->CmdBuffer.size(); ++j) {
       const auto& cmd = cmd_list->CmdBuffer[j];
 
       ImmediateDraw draw;
       draw.primitive_type = ImmediatePrimitiveType::kTriangles;
       draw.count = cmd.ElemCount;
-      draw.index_offset = index_offset;
+      draw.index_offset = cmd.IdxOffset;
       draw.texture = reinterpret_cast<ImmediateTexture*>(cmd.TextureId);
       draw.scissor = true;
       draw.scissor_left = cmd.ClipRect.x;
@@ -361,8 +531,6 @@ void ImGuiDrawer::RenderDrawLists(ImDrawData* data,
       draw.scissor_right = cmd.ClipRect.z;
       draw.scissor_bottom = cmd.ClipRect.w;
       immediate_drawer_->Draw(draw);
-
-      index_offset += cmd.ElemCount;
     }
 
     immediate_drawer_->EndDrawBatch();
@@ -497,13 +665,7 @@ void ImGuiDrawer::ClearInput() {
   }
   io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
   std::memset(io.MouseDown, 0, sizeof(io.MouseDown));
-  io.MouseWheel = 0.0f;
-  io.MouseWheelH = 0.0f;
-  io.KeyCtrl = false;
-  io.KeyShift = false;
-  io.KeyAlt = false;
-  io.KeySuper = false;
-  std::memset(io.KeysDown, 0, sizeof(io.KeysDown));
+  io.ClearInputKeys();
   io.ClearInputCharacters();
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
   reset_mouse_position_after_next_frame_ = false;
@@ -511,9 +673,9 @@ void ImGuiDrawer::ClearInput() {
 
 void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
   auto& io = GetIO();
-  VirtualKey virtual_key = e.virtual_key();
-  if (size_t(virtual_key) < xe::countof(io.KeysDown)) {
-    io.KeysDown[size_t(virtual_key)] = is_down;
+  const VirtualKey virtual_key = e.virtual_key();
+  if (auto imGuiKey = VirtualKeyToImGuiKey(virtual_key); imGuiKey) {
+    io.AddKeyEvent(*imGuiKey, is_down);
   }
   switch (virtual_key) {
     case VirtualKey::kShift:
@@ -555,6 +717,25 @@ void ImGuiDrawer::SwitchToPhysicalMouseAndUpdateMousePosition(
   }
   reset_mouse_position_after_next_frame_ = false;
   UpdateMousePosition(float(e.x()), float(e.y()));
+}
+
+void ImGuiDrawer::DetachIfLastWindowRemoved() {
+  // IsDrawingDialogs() is also checked because in a situation of removing the
+  // only dialog, then adding a dialog, from within a dialog's Draw function,
+  // re-registering the ImGuiDrawer may result in ImGui being drawn multiple
+  // times in the current frame.
+  if (!dialogs_.empty() || !notifications_.empty() || IsDrawingDialogs()) {
+    return;
+  }
+  if (presenter_) {
+    presenter_->RemoveUIDrawerFromUIThread(this);
+  }
+  window_->RemoveInputListener(this);
+  // Clear all input since no input will be received anymore, and when the
+  // drawer becomes active again, it'd have an outdated input state otherwise
+  // which will be persistent until new events actualize individual input
+  // properties.
+  ClearInput();
 }
 
 }  // namespace ui

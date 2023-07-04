@@ -31,6 +31,7 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
+#include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/ui/file_picker.h"
@@ -47,8 +48,19 @@
 
 DECLARE_bool(debug);
 
+DECLARE_string(hid);
+
+DECLARE_bool(guide_button);
+
+DECLARE_bool(d3d12_readback_resolve);
+
+DECLARE_bool(d3d12_clear_memory_page_state);
+
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
+
+DEFINE_bool(controller_hotkeys, true,
+            "Hotkeys for Xbox and PS controllers.", "General");
 
 DEFINE_string(
     postprocess_antialiasing, "",
@@ -126,6 +138,11 @@ DEFINE_bool(
     "depends on the 10bpc displaying capabilities of the actual display used.",
     "Display");
 
+DEFINE_int32(recent_titles_entry_amount, 10,
+             "Allows user to define how many titles is saved in list of "
+             "recently played titles.",
+             "General");
+
 namespace xe {
 namespace app {
 
@@ -134,6 +151,10 @@ using xe::ui::KeyEvent;
 using xe::ui::MenuItem;
 using xe::ui::UIEvent;
 
+using namespace xe::hid;
+using namespace xe::gpu;
+
+const std::string kRecentlyPlayedTitlesFilename = "recent.toml";
 const std::string kBaseTitle = "Xenia-burnout5";
 
 EmulatorWindow::EmulatorWindow(Emulator* emulator,
@@ -162,7 +183,7 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
                 XE_BUILD_BRANCH "@" XE_BUILD_COMMIT_SHORT " on " XE_BUILD_DATE
                 ")";
 
-  ReadRecentlyLaunchedTitles();
+  LoadRecentlyLaunchedTitles();
 }
 
 std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(
@@ -230,6 +251,17 @@ void EmulatorWindow::OnEmulatorInitialized() {
   if (cvars::fullscreen) {
     SetFullscreen(true);
   }
+
+  if (IsUseNexusForGameBarEnabled()) {
+    XELOGE(
+        "Xbox Gamebar Enabled, using BACK button instead of GUIDE for "
+        "controller hotkeys!!!");
+  }
+
+  // Create a thread to listen for controller hotkeys.
+  Gamepad_HotKeys_Listener =
+      threading::Thread::Create({}, [&] { GamepadHotKeys(); });
+  Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
@@ -403,12 +435,17 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
               new_presenter_config.GetFsrSharpnessReduction();
           ImGui::TextUnformatted(
               "FSR sharpness reduction when upscaling (lower is sharper):");
-          // Power 2.0 as the reduction is in stops, used in exp2.
+          const auto label =
+              fmt::format("{:.3f} stops", fsr_sharpness_reduction);
+          // Power 2.0 scaling as the reduction is in stops, used in exp2.
+          fsr_sharpness_reduction = sqrt(2.f * fsr_sharpness_reduction);
           ImGui::SliderFloat(
               "##FSRSharpnessReduction", &fsr_sharpness_reduction,
               ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMin,
               ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMax,
-              "%.3f stops", 2.0f);
+              label.c_str(), ImGuiSliderFlags_NoInput);
+          fsr_sharpness_reduction =
+              .5f * fsr_sharpness_reduction * fsr_sharpness_reduction;
           ImGui::SameLine();
           if (ImGui::Button("Reset##ResetFSRSharpnessReduction")) {
             fsr_sharpness_reduction = ui::Presenter::GuestOutputPaintConfig ::
@@ -603,6 +640,9 @@ bool EmulatorWindow::Initialize() {
     hid_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "&Toggle controller vibration", "",
         std::bind(&EmulatorWindow::ToggleControllerVibration, this)));
+    hid_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Display controller hotkeys", "",
+        std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
   }
   main_menu->AddChild(std::move(hid_menu));
 
@@ -883,10 +923,10 @@ void EmulatorWindow::InstallContent() {
       if (result != X_STATUS_SUCCESS) {
         XELOGE("Failed to install content! Error code: {:08X}", result);
 
-        MessageBoxA(nullptr,
-                    "Failed to install content!\n\nCheck xenia.log for technical "
-                    "details.",
-                    "Failed to install content!", MB_ICONERROR);
+        xe::ui::ImGuiDialog::ShowMessageBox(
+            imgui_drawer_.get(), "Failed to install content!",
+            "Failed to install content!\n\nCheck xenia.log for technical "
+            "details.");
       }
     }
   }
@@ -1071,26 +1111,386 @@ void EmulatorWindow::SetInitializingShaderStorage(bool initializing) {
   UpdateTitle();
 }
 
-void EmulatorWindow::RunPreviouslyPlayedTitle() {
-  if (recently_launched_titles_.size() >= 1) {
-    RunTitle(recently_launched_titles_[0].path_to_file);
+// Notes:
+// SDL and XInput both support the guide button
+//
+// Assumes titles do not use the guide button.
+// For titles that do such as dashboards these titles could be excluded based on
+// their title ID.
+//
+// Xbox Gamebar:
+// If the Xbox Gamebar overlay is enabled Windows will consume the guide
+// button's input, this can be seen using hid-demo.
+//
+// Workaround: Detect if the Xbox Gamebar overlay is enabled then use the BACK
+// button instead of the GUIDE button. Therefore BACK and GUIDE are reserved
+// buttons for hotkeys.
+//
+// This is not an issue with DualShock controllers because Windows will not
+// open the gamebar overlay using the PlayStation menu button.
+//
+// Xbox One S Controller:
+// The guide button on this controller is very buggy no idea why.
+// Using xinput usually registers after a double tap.
+// Doesn't work at all using SDL.
+// Needs more testing.
+//
+// Steam:
+// If guide button focus is enabled steam will open.
+// Steam uses BACK + GUIDE to open an On-Screen keyboard, however this is not a
+// problem since both these buttons are reserved.
+const std::map<int, EmulatorWindow::ControllerHotKey> controller_hotkey_map = {
+    // Must use the Guide Button for all pass through hotkeys
+    {X_INPUT_GAMEPAD_A | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ReadbackResolve,
+         "A + Guide = Toggle Readback Resolve", true)},
+    {X_INPUT_GAMEPAD_B | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ToggleLogging,
+         "B + Guide = Toggle between loglevel set in config and the 'Disabled' loglevel.", true, true)},
+    {X_INPUT_GAMEPAD_Y | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ToggleFullscreen,
+         "Y + Guide = Toggle Fullscreen", true)},
+    {X_INPUT_GAMEPAD_X | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ClearMemoryPageState,
+         "X + Guide = Toggle Clear Memory Page State", true)},
+
+    {X_INPUT_GAMEPAD_RIGHT_SHOULDER | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ClearGPUCache,
+         "Right Shoulder + Guide = Clear GPU Cache", true)},
+    {X_INPUT_GAMEPAD_LEFT_SHOULDER | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ToggleControllerVibration,
+         "Left Shoulder + Guide = Toggle Controller Vibration", true)},
+
+    // CPU Time Scalar with no rumble feedback
+    {X_INPUT_GAMEPAD_DPAD_DOWN | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::CpuTimeScalarSetHalf,
+         "D-PAD Down + Guide = Half CPU Scalar")},
+    {X_INPUT_GAMEPAD_DPAD_UP | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::CpuTimeScalarSetDouble,
+         "D-PAD Up + Guide = Double CPU Scalar")},
+    {X_INPUT_GAMEPAD_DPAD_RIGHT | X_INPUT_GAMEPAD_GUIDE,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::CpuTimeScalarReset,
+         "D-PAD Right + Guide = Reset CPU Scalar")},
+
+    // non-pass through hotkeys
+    {X_INPUT_GAMEPAD_Y, EmulatorWindow::ControllerHotKey(
+                            EmulatorWindow::ButtonFunctions::ToggleFullscreen,
+                            "Y = Toggle Fullscreen", true, false)},
+    {X_INPUT_GAMEPAD_START, EmulatorWindow::ControllerHotKey(
+                                EmulatorWindow::ButtonFunctions::RunTitle,
+                                "Start = Run Selected Title", false, false)},
+    {X_INPUT_GAMEPAD_BACK | X_INPUT_GAMEPAD_START,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::ToggleLogging,
+         "Back + Start = Toggle between loglevel set in config and the 'Disabled' loglevel.", false, false)},
+    {X_INPUT_GAMEPAD_DPAD_DOWN,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::IncTitleSelect,
+         "D-PAD Down = Title Selection +1", true, false)},
+    {X_INPUT_GAMEPAD_DPAD_UP,
+     EmulatorWindow::ControllerHotKey(
+         EmulatorWindow::ButtonFunctions::DecTitleSelect,
+         "D-PAD Up = Title Selection -1", true, false)}};
+
+EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
+    int buttons) {
+  // Default return value
+  EmulatorWindow::ControllerHotKey Unknown_hotkey = {};
+
+  if (buttons == 0) return Unknown_hotkey;
+
+  // Hotkey cool-down to prevent toggling too fast
+  const std::chrono::milliseconds delay(75);
+
+  // If the Xbox Gamebar is enabled or the Guide button is disabled then
+  // replace the Guide button with the Back button without redeclaring the key
+  // mappings
+  if (IsUseNexusForGameBarEnabled() || !cvars::guide_button) {
+    if ((buttons & X_INPUT_GAMEPAD_BACK) == X_INPUT_GAMEPAD_BACK) {
+      buttons &= ~X_INPUT_GAMEPAD_BACK;
+      buttons |= X_INPUT_GAMEPAD_GUIDE;
+    }
+  }
+
+  auto it = controller_hotkey_map.find(buttons);
+  if (it == controller_hotkey_map.end()) {
+    return Unknown_hotkey;
+  }
+
+  // Do not activate hotkeys that are not intended for activation during
+  // gameplay
+  if (emulator_->is_title_open()) {
+    // If non-pass through (menu hoykeys) or hotkeys disabled then return
+    if (!it->second.title_passthru || !cvars::controller_hotkeys) {
+      return Unknown_hotkey;
+    }
+  }
+
+  EmulatorWindow::ControllerHotKey button_combination = it->second;
+
+  switch (button_combination.function) {
+    case ButtonFunctions::ToggleFullscreen:
+      ToggleFullscreen();
+
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::RunTitle: {
+      if (selected_title_index == -1) selected_title_index++;
+
+      app_context().CallInUIThread([this]() {
+        RunTitle(recently_launched_titles_[selected_title_index].path_to_file);
+      });
+
+    } break;
+    case ButtonFunctions::ClearMemoryPageState:
+      ToggleGPUSetting(gpu_cvar::ClearMemoryPageState);
+
+      // Assume the user wants ClearCaches as well
+      if (cvars::d3d12_clear_memory_page_state) {
+        GpuClearCaches();
+      }
+
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::ReadbackResolve:
+      ToggleGPUSetting(gpu_cvar::ReadbackResolve);
+
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::CpuTimeScalarSetHalf:
+      CpuTimeScalarSetHalf();
+      break;
+    case ButtonFunctions::CpuTimeScalarSetDouble:
+      CpuTimeScalarSetDouble();
+      break;
+    case ButtonFunctions::CpuTimeScalarReset:
+      CpuTimeScalarReset();
+      break;
+    case ButtonFunctions::ClearGPUCache:
+      GpuClearCaches();
+
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::ToggleControllerVibration:
+      ToggleControllerVibration();
+
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::IncTitleSelect:
+      selected_title_index++;
+      break;
+    case ButtonFunctions::DecTitleSelect:
+      selected_title_index--;
+      break;
+    case ButtonFunctions::ToggleLogging:
+      logging::internal::ToggleLogLevel();
+      break;
+    case ButtonFunctions::Unknown:
+    default:
+      break;
+  }
+
+  if ((button_combination.function == ButtonFunctions::IncTitleSelect ||
+      button_combination.function == ButtonFunctions::DecTitleSelect) &&
+      recently_launched_titles_.size() > 0) {
+    selected_title_index = std::clamp(
+        selected_title_index, 0, (int)recently_launched_titles_.size() - 1);
+
+    // Must clear dialogs to prevent stacking
+    imgui_drawer_.get()->ClearDialogs();
+
+    // Titles may contain Unicode characters such as At World’s End
+    // Must use ImGUI font that can render these Unicode characters
+    std::string title =
+        std::to_string(selected_title_index + 1) + ": " +
+        recently_launched_titles_[selected_title_index].title_name + "\n\n" +
+        controller_hotkey_map.find(X_INPUT_GAMEPAD_START)->second.pretty;
+
+    xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Title Selection",
+                                        title);
+  }
+
+  xe::threading::Sleep(delay);
+
+  return it->second;
+}
+
+void EmulatorWindow::VibrateController(xe::hid::InputSystem* input_sys,
+                                       uint32_t user_index,
+                                       bool toggle_rumble) {
+  const std::chrono::milliseconds rumble_duration(100);
+
+  // Hold lock while sleeping this thread for the duration of the rumble,
+  // otherwise the rumble may fail.
+  auto input_lock = input_sys->lock();
+
+  X_INPUT_VIBRATION vibration = {};
+
+  vibration.left_motor_speed = toggle_rumble ? UINT16_MAX : 0;
+  vibration.right_motor_speed = toggle_rumble ? UINT16_MAX : 0;
+
+  input_sys->SetState(user_index, &vibration);
+
+  // Vibration duration
+  if (toggle_rumble) {
+    xe::threading::Sleep(rumble_duration);
   }
 }
 
-xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path) {
-  bool titleExists = !std::filesystem::exists(path);
+void EmulatorWindow::GamepadHotKeys() {
+  X_INPUT_STATE state;
 
-  if (path.empty() || titleExists) {
-    char* log_msg = path.empty() ? "Failed to launch title path is empty"
-                                 : "Failed to launch title path is invalid";
+  const std::chrono::milliseconds thread_delay(75);
+
+  auto input_sys = emulator_->input_system();
+
+  if (input_sys) {
+    while (true) {
+      auto input_lock = input_sys->lock();
+
+      for (uint32_t user_index = 0; user_index < MAX_USERS; ++user_index) {
+        X_RESULT result = input_sys->GetState(user_index, &state);
+
+        // Release the lock before processing the hotkey
+        input_lock.mutex()->unlock();
+
+        // Check if the controller is connected
+        if (result == X_ERROR_SUCCESS) {
+          if (ProcessControllerHotkey(state.gamepad.buttons).rumble) {
+            // Enable Vibration
+            VibrateController(input_sys, user_index, true);
+
+            // Disable Vibration
+            VibrateController(input_sys, user_index, false);
+          }
+        }
+      }
+
+      xe::threading::Sleep(thread_delay);
+    }
+  }
+}
+
+void EmulatorWindow::ToggleGPUSetting(gpu_cvar value) {
+  switch (value) {
+    case gpu_cvar::ClearMemoryPageState:
+      D3D12SaveGPUSetting(D3D12GPUSetting::ClearMemoryPageState,
+                          !cvars::d3d12_clear_memory_page_state);
+      break;
+    case gpu_cvar::ReadbackResolve:
+      D3D12SaveGPUSetting(D3D12GPUSetting::ReadbackResolve,
+                          !cvars::d3d12_readback_resolve);
+      break;
+  }
+}
+
+// Determine if the Xbox Gamebar is enabled via the Windows registry
+bool EmulatorWindow::IsUseNexusForGameBarEnabled() {
+#ifdef _WIN32
+  const LPWSTR reg_path = L"SOFTWARE\\Microsoft\\GameBar";
+  const LPWSTR key = L"UseNexusForGameBarEnabled";
+
+  DWORD value = 0;
+  DWORD dataSize = sizeof(value);
+
+  RegGetValue(HKEY_CURRENT_USER, reg_path, key, RRF_RT_DWORD, nullptr, &value,
+              &dataSize);
+
+  return (bool)value;
+#else
+  return false;
+#endif
+}
+
+std::string EmulatorWindow::BoolToString(bool value) {
+  return std::string(value ? "true" : "false");
+}
+
+void EmulatorWindow::DisplayHotKeysConfig() {
+  std::string msg = "";
+  std::string msg_passthru = "";
+
+  bool guide_enabled = !IsUseNexusForGameBarEnabled() && cvars::guide_button;
+
+  for (auto const& [key, val] : controller_hotkey_map) {
+    std::string pretty_text = val.pretty;
+
+    if (!guide_enabled) {
+      pretty_text = std::regex_replace(
+          pretty_text,
+          std::regex("Guide", std::regex_constants::syntax_option_type::icase),
+          "Back");
+    }
+
+    if (emulator_->is_title_open() && !val.title_passthru) {
+      pretty_text += " (Disabled)";
+    }
+
+    if (val.title_passthru && !cvars::controller_hotkeys) {
+      pretty_text += " (Disabled)";
+    }
+
+    if (val.title_passthru) {
+      msg += pretty_text + "\n";
+    } else {
+      msg_passthru += pretty_text + "\n";
+    }
+  }
+
+  // Add Title
+  msg.insert(0, "Gameplay Hotkeys\n");
+
+  // Prepend non-passthru hotkeys
+  msg_passthru += "\n";
+  msg.insert(0, msg_passthru);
+  msg += "\n";
+
+  msg += "Readback Resolve: " + BoolToString(cvars::d3d12_readback_resolve);
+  msg += "\n";
+
+  msg += "Clear Memory Page State: " +
+         BoolToString(cvars::d3d12_clear_memory_page_state);
+  msg += "\n";
+
+  msg += "Controller Hotkeys: " + BoolToString(cvars::controller_hotkeys);
+
+  imgui_drawer_.get()->ClearDialogs();
+  xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Controller Hotkeys",
+                                      msg);
+}
+
+xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
+  bool titleExists = !std::filesystem::exists(path_to_file);
+
+  if (path_to_file.empty() || titleExists) {
+    char* log_msg = path_to_file.empty()
+                        ? "Failed to launch title path is empty."
+                        : "Failed to launch title path is invalid.";
 
     XELOGE(log_msg);
 
-    MessageBoxA(nullptr, log_msg, "Title Launch Failed!", MB_ICONERROR);
+    imgui_drawer_.get()->ClearDialogs();
+
+    xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
+                                        "Title Launch Failed!", log_msg);
 
     return X_STATUS_NO_SUCH_FILE;
   }
-  
+
   if (emulator_->is_title_open()) {
     // Terminate the current title and start a new title.
     // if (emulator_->TerminateTitle() == X_STATUS_SUCCESS) {
@@ -1102,42 +1502,49 @@ xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path) {
 
   // Prevent crashing the emulator by not loading a game if a game is already
   // loaded.
-  auto abs_path = std::filesystem::absolute(path);
+  auto abs_path = std::filesystem::absolute(path_to_file);
   auto result = emulator_->LaunchPath(abs_path);
+
+  imgui_drawer_.get()->ClearDialogs();
 
   if (result) {
     XELOGE("Failed to launch target: {:08X}", result);
 
-    MessageBoxA(
-        nullptr,
-        "Failed to launch title.\n\nCheck xenia.log for technical details.",
-        "Title Launch Failed!", MB_ICONERROR);
+    xe::ui::ImGuiDialog::ShowMessageBox(
+        imgui_drawer_.get(), "Title Launch Failed!",
+        "Failed to launch title.\n\nCheck xenia.log for technical details.");
   } else {
-    AddRecentlyLaunchedTitle(path, emulator_->title_name());
+    AddRecentlyLaunchedTitle(path_to_file, emulator_->title_name());
   }
 
   return result;
 }
 
-void EmulatorWindow::FillRecentlyLaunchedTitlesMenu(
-    xe::ui::MenuItem* recent_menu) {
-  unsigned int index = 0;
-  for (const auto& [title_name, path] : recently_launched_titles_) {
-    if (index == 0) {
-      recent_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, title_name, "F9",
-                           std::bind(&EmulatorWindow::RunTitle, this, path)));
-    } else {
-      recent_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, title_name,
-                           std::bind(&EmulatorWindow::RunTitle, this, path)));
-    }
-    index++;
+void EmulatorWindow::RunPreviouslyPlayedTitle() {
+  if (recently_launched_titles_.size() >= 1) {
+    RunTitle(recently_launched_titles_[0].path_to_file);
   }
 }
 
-void EmulatorWindow::ReadRecentlyLaunchedTitles() {
-  std::ifstream file(emulator()->storage_root() / "recent.toml");
+void EmulatorWindow::FillRecentlyLaunchedTitlesMenu(
+    xe::ui::MenuItem* recent_menu) {
+  for (int i = 0; i < recently_launched_titles_.size(); ++i) {
+    std::string hotkey = (i == 0) ? "F9" : "";
+
+    const RecentTitleEntry& entry = recently_launched_titles_[i];
+    const std::string item_text = entry.title_name.empty()
+                                      ? entry.path_to_file.string()
+                                      : entry.title_name;
+
+    recent_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, item_text, hotkey,
+        std::bind(&EmulatorWindow::RunTitle, this, entry.path_to_file)));
+  }
+}
+
+void EmulatorWindow::LoadRecentlyLaunchedTitles() {
+  std::ifstream file(emulator()->storage_root() /
+                     kRecentlyPlayedTitlesFilename);
   if (!file.is_open()) {
     return;
   }
@@ -1153,10 +1560,23 @@ void EmulatorWindow::ReadRecentlyLaunchedTitles() {
 
   if (parsed_file->is_table()) {
     for (const auto& [index, entry] : *parsed_file->as_table()) {
-      for (const auto& [title_name, path] : *entry->as_table()) {
-        recently_launched_titles_.push_back(
-            {title_name, path->as<std::string>()->get()});
+      if (!entry->is_table()) {
+        continue;
       }
+
+      const std::shared_ptr<cpptoml::table> entry_table = entry->as_table();
+
+      std::string title_name = *entry_table->get_as<std::string>("title_name");
+      std::string path = *entry_table->get_as<std::string>("path");
+      std::time_t last_run_time =
+          *entry_table->get_as<uint64_t>("last_run_time");
+
+      std::error_code ec = {};
+      if (path.empty() || !std::filesystem::exists(path, ec)) {
+        continue;
+      }
+
+      recently_launched_titles_.push_back({title_name, path, last_run_time});
     }
   }
 }
@@ -1174,31 +1594,31 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
   }
 
   recently_launched_titles_.insert(recently_launched_titles_.cbegin(),
-                                   {title_name, path_to_file});
+                                   {title_name, path_to_file, time(nullptr)});
   // Serialize to toml
   auto toml_table = cpptoml::make_table();
 
-  const uint8_t amount_of_stored_entries = 10;
   uint8_t index = 0;
-
-  for (const auto& [title_name, path] : recently_launched_titles_) {
+  for (const RecentTitleEntry& entry : recently_launched_titles_) {
     auto entry_table = cpptoml::make_table();
 
     // Fill entry under specific index.
-    std::string str_path = xe::path_to_utf8(path);
-    entry_table->insert(title_name.empty() ? str_path : title_name, str_path);
+    std::string str_path = xe::path_to_utf8(entry.path_to_file);
+    entry_table->insert("title_name", entry.title_name);
+    entry_table->insert("path", str_path);
+    entry_table->insert("last_run_time", entry.last_run_time);
     entry_table->end();
 
     toml_table->insert(std::to_string(index++), entry_table);
 
-    if (index >= amount_of_stored_entries) {
+    if (index >= cvars::recent_titles_entry_amount) {
       break;
     }
   }
   toml_table->end();
 
   // Open and write serialized data.
-  std::ofstream file(emulator()->storage_root() / "recent.toml",
+  std::ofstream file(emulator()->storage_root() / kRecentlyPlayedTitlesFilename,
                      std::ofstream::trunc);
   file << *toml_table;
   file.close();

@@ -55,6 +55,8 @@
 #include "xenia/cpu/backend/x64/x64_backend.h"
 #endif  // XE_ARCH
 
+DECLARE_int32(user_language);
+
 DEFINE_double(time_scalar, 1.0,
               "Scalar used to speed or slow time (1x, 2x, 1/2x, etc).",
               "General");
@@ -299,11 +301,11 @@ X_STATUS Emulator::MountPath(const std::filesystem::path& path,
                              const std::string_view mount_path) {
   auto device = CreateVfsDeviceBasedOnPath(path, mount_path);
   if (!device->Initialize()) {
-    xe::FatalError("Unable to mount {}; file not found or corrupt.");
+    xe::FatalError(fmt::format("Unable to mount {}; file corrupt or not found.", xe::path_to_utf8(path)));
     return X_STATUS_NO_SUCH_FILE;
   }
   if (!file_system_->RegisterDevice(std::move(device))) {
-    xe::FatalError("Unable to register {}.");
+    xe::FatalError(fmt::format("Unable to register {} to {}.", xe::path_to_utf8(path), xe::path_to_utf8(mount_path)));
     return X_STATUS_NO_SUCH_FILE;
   }
 
@@ -881,22 +883,34 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
             kernel_state_->user_profile(i)->SetTitleSpaData(spa_file());
           }
         }
-        // TODO(gibbed): get title respective to user locale.
-        title_name_ = spa_->GetTitleName(XLanguage::kEnglish);
-        if (title_name_.empty()) {
-          // If English title is unavailable, get the title in default locale.
-          title_name_ = spa_->GetTitleName();
-        }
+        
+      const kernel::util::XdbfGameData db = kernel_state_->module_xdbf(module);
+      if (db.is_valid()) {
+        XLanguage language =
+            db.GetExistingLanguage(static_cast<XLanguage>(cvars::user_language));
+        title_name_ = db.title(language);
         XELOGI("Title name: {}", title_name_);
-        auto icon_block = spa_->GetIcon();
 
+        // Show achievments data
+        XELOGI("-------------------- ACHIEVEMENTS --------------------");
+        const std::vector<kernel::util::XdbfAchievementTableEntry>
+            achievement_list = db.GetAchievements();
+        for (const kernel::util::XdbfAchievementTableEntry& entry :
+             achievement_list) {
+          std::string label = db.GetStringTableEntry(language, entry.label_id);
+          std::string desc =
+              db.GetStringTableEntry(language, entry.description_id);
+
+          XELOGI("{} - {} - {} - {}", entry.id, label, desc, entry.gamerscore);
+        }
+        XELOGI("----------------- END OF ACHIEVEMENTS ----------------");
+
+        auto icon_block = db.icon();
         if (icon_block) {
-          display_window_->SetIcon(icon_block->data.data(),
-                                   icon_block->data.size());
+          display_window_->SetIcon(icon_block.buffer, icon_block.size);
         }
       }
     }
-  }
 
   // Initializing the shader storage in a blocking way so the user doesn't
   // miss the initial seconds - for instance, sound from an intro video may

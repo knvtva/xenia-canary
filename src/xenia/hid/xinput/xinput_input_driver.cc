@@ -27,6 +27,7 @@ XInputInputDriver::XInputInputDriver(xe::ui::Window* window,
       module_(nullptr),
       XInputGetCapabilities_(nullptr),
       XInputGetState_(nullptr),
+      XInputGetStateEx_(nullptr),
       XInputGetKeystroke_(nullptr),
       XInputSetState_(nullptr),
       XInputEnable_(nullptr) {}
@@ -37,6 +38,7 @@ XInputInputDriver::~XInputInputDriver() {
     module_ = nullptr;
     XInputGetCapabilities_ = nullptr;
     XInputGetState_ = nullptr;
+    XInputGetStateEx_ = nullptr;
     XInputGetKeystroke_ = nullptr;
     XInputSetState_ = nullptr;
     XInputEnable_ = nullptr;
@@ -49,9 +51,14 @@ X_STATUS XInputInputDriver::Setup() {
     return X_STATUS_DLL_NOT_FOUND;
   }
 
+  // Support guide button with XInput using XInputGetStateEx
+  // https://source.winehq.org/git/wine.git/?a=commit;h=de3591ca9803add117fbacb8abe9b335e2e44977
+  auto const XInputGetStateEx = (LPCSTR)100;
+
   // Required.
   auto xigc = GetProcAddress(module, "XInputGetCapabilities");
   auto xigs = GetProcAddress(module, "XInputGetState");
+  auto xigsEx = GetProcAddress(module, XInputGetStateEx);
   auto xigk = GetProcAddress(module, "XInputGetKeystroke");
   auto xiss = GetProcAddress(module, "XInputSetState");
 
@@ -67,17 +74,14 @@ X_STATUS XInputInputDriver::Setup() {
   module_ = module;
   XInputGetCapabilities_ = xigc;
   XInputGetState_ = xigs;
+  XInputGetStateEx_ = xigsEx;
   XInputGetKeystroke_ = xigk;
   XInputSetState_ = xiss;
   XInputEnable_ = xie;
 
-  if (cvars::guide_button) {
-    // Theoretically there is XInputGetStateEx
-    // but thats undocumented and milage varies.
-    XELOGW("XInput: Guide button support is not implemented.");
-  }
   return X_STATUS_SUCCESS;
 }
+
 constexpr uint64_t SKIP_INVALID_CONTROLLER_TIME = 1100;
 static uint64_t last_invalid_time[4];
 
@@ -137,10 +141,19 @@ X_RESULT XInputInputDriver::GetState(uint32_t user_index,
   if (skipper) {
     return skipper;
   }
-  XINPUT_STATE native_state;
-  auto xigs = (decltype(&XInputGetState))XInputGetState_;
 
-  DWORD result = xigs(user_index, &native_state);
+  // Added padding in case we are using XInputGetStateEx
+  struct {
+    XINPUT_STATE state;
+    unsigned int dwPaddingReserved;
+  } native_state;
+
+  // If the guide button is enabled use XInputGetStateEx, otherwise use the
+  // default XInputGetState.
+  auto xigs = cvars::guide_button ? (decltype(&XInputGetState))XInputGetStateEx_
+                                  : (decltype(&XInputGetState))XInputGetState_;
+
+  DWORD result = xigs(user_index, &native_state.state);
   if (result) {
     if (result == ERROR_DEVICE_NOT_CONNECTED) {
       set_skip(user_index);
@@ -148,14 +161,14 @@ X_RESULT XInputInputDriver::GetState(uint32_t user_index,
     return result;
   }
 
-  out_state->packet_number = native_state.dwPacketNumber;
-  out_state->gamepad.buttons = native_state.Gamepad.wButtons;
-  out_state->gamepad.left_trigger = native_state.Gamepad.bLeftTrigger;
-  out_state->gamepad.right_trigger = native_state.Gamepad.bRightTrigger;
-  out_state->gamepad.thumb_lx = native_state.Gamepad.sThumbLX;
-  out_state->gamepad.thumb_ly = native_state.Gamepad.sThumbLY;
-  out_state->gamepad.thumb_rx = native_state.Gamepad.sThumbRX;
-  out_state->gamepad.thumb_ry = native_state.Gamepad.sThumbRY;
+  out_state->packet_number = native_state.state.dwPacketNumber;
+  out_state->gamepad.buttons = native_state.state.Gamepad.wButtons;
+  out_state->gamepad.left_trigger = native_state.state.Gamepad.bLeftTrigger;
+  out_state->gamepad.right_trigger = native_state.state.Gamepad.bRightTrigger;
+  out_state->gamepad.thumb_lx = native_state.state.Gamepad.sThumbLX;
+  out_state->gamepad.thumb_ly = native_state.state.Gamepad.sThumbLY;
+  out_state->gamepad.thumb_rx = native_state.state.Gamepad.sThumbRX;
+  out_state->gamepad.thumb_ry = native_state.state.Gamepad.sThumbRY;
 
   return result;
 }
