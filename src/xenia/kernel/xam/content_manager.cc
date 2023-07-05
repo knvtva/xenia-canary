@@ -206,7 +206,7 @@ X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
     // usually requires title_id to be provided
     // Kinda simple workaround for that, but still assumption
     data.title_id = title_id;
-    data.unk134 = kernel_state_->user_profile(uint32_t(0))->xuid();
+    data.unk134 = kernel_state_->user_profile(uint32_t(0))->xuid_offline();
     return X_STATUS_SUCCESS;
   }
   return X_STATUS_NO_SUCH_FILE;

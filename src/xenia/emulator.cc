@@ -872,45 +872,46 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     uint32_t resource_data = 0;
     uint32_t resource_size = 0;
 
-    if (XSUCCEEDED(
-            module->GetSection(title_id, &resource_data, &resource_size))) {
-      spa_ = std::make_unique<kernel::xam::xdbf::SpaFile>();
-      if (spa_->Read(module->memory()->TranslateVirtual(resource_data),
-                     resource_size)) {
-        // Set title SPA and get title name/icon
-        for (uint32_t i = 0; i < 4; i++) {
-          if (kernel_state_->IsUserSignedIn(i)) {
-            kernel_state_->user_profile(i)->SetTitleSpaData(spa_file());
-          }
-        }
-        
-      const kernel::util::XdbfGameData db = kernel_state_->module_xdbf(module);
-      if (db.is_valid()) {
-        XLanguage language =
-            db.GetExistingLanguage(static_cast<XLanguage>(cvars::user_language));
-        title_name_ = db.title(language);
-        XELOGI("Title name: {}", title_name_);
-
-        // Show achievments data
-        XELOGI("-------------------- ACHIEVEMENTS --------------------");
-        const std::vector<kernel::util::XdbfAchievementTableEntry>
-            achievement_list = db.GetAchievements();
-        for (const kernel::util::XdbfAchievementTableEntry& entry :
-             achievement_list) {
-          std::string label = db.GetStringTableEntry(language, entry.label_id);
-          std::string desc =
-              db.GetStringTableEntry(language, entry.description_id);
-
-          XELOGI("{} - {} - {} - {}", entry.id, label, desc, entry.gamerscore);
-        }
-        XELOGI("----------------- END OF ACHIEVEMENTS ----------------");
-
-        auto icon_block = db.icon();
-        if (icon_block) {
-          display_window_->SetIcon(icon_block.buffer, icon_block.size);
+    module->GetSection(title_id, &resource_data, &resource_size);
+    
+    spa_ = std::make_unique<kernel::xam::xdbf::SpaFile>();
+    if (spa_->Read(module->memory()->TranslateVirtual(resource_data),
+                   resource_size)) {
+      // Set title SPA and get title name/icon
+      for (uint32_t i = 0; i < 4; i++) {
+        if (kernel_state_->IsUserSignedIn(i)) {
+          kernel_state_->user_profile(i)->SetTitleSpaData(spa_file());
         }
       }
     }
+
+    const kernel::util::XdbfGameData db = kernel_state_->module_xdbf(module);
+    if (db.is_valid()) {
+      XLanguage language =
+          db.GetExistingLanguage(static_cast<XLanguage>(cvars::user_language));
+      title_name_ = db.title(language);
+      XELOGI("Title name: {}", title_name_);
+
+      // Show achievments data
+      XELOGI("-------------------- ACHIEVEMENTS --------------------");
+      const std::vector<kernel::util::XdbfAchievementTableEntry>
+          achievement_list = db.GetAchievements();
+      for (const kernel::util::XdbfAchievementTableEntry& entry :
+           achievement_list) {
+        std::string label = db.GetStringTableEntry(language, entry.label_id);
+        std::string desc =
+            db.GetStringTableEntry(language, entry.description_id);
+
+        XELOGI("{} - {} - {} - {}", entry.id, label, desc, entry.gamerscore);
+      }
+      XELOGI("----------------- END OF ACHIEVEMENTS ----------------");
+
+      auto icon_block = db.icon();
+      if (icon_block) {
+        display_window_->SetIcon(icon_block.buffer, icon_block.size);
+      }
+    }
+  }
 
   // Initializing the shader storage in a blocking way so the user doesn't
   // miss the initial seconds - for instance, sound from an intro video may

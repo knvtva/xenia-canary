@@ -836,14 +836,13 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
           xe::to_utf16(db.GetStringTableEntry(language, entry.unachieved_id)),
           entry.image_id,
           entry.gamerscore,
-          {0, 0},
+          {0},
           entry.flags};
 
       e->AppendItem(item);
     }
   }
 
-  XELOGD("XamUserCreateAchievementEnumerator: added %d items to enumerator", i);
 
   *handle_ptr = e->handle();
   return X_ERROR_SUCCESS;
