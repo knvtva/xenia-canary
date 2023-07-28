@@ -208,7 +208,6 @@ class Emulator {
   void Pause();
   void Resume();
   bool is_paused() const { return paused_; }
-  void ClearStickyPersistentFlags();
   bool SaveToFile(const std::filesystem::path& path);
   bool RestoreFromFile(const std::filesystem::path& path);
 
@@ -228,9 +227,7 @@ class Emulator {
 
  private:
   enum : uint64_t {
-    EmulatorFlagQuickstartShown = 1ULL << 0,
-    EmulatorFlagIsoWarningAcknowledged = 1ULL << 1,
-    EmulatorFlagIsoWarningSticky = 1ULL<<2,
+    EmulatorFlagDisclaimerAcknowledged = 1ULL << 0
   };
   static uint64_t GetPersistentEmulatorFlags();
   static void SetPersistentEmulatorFlags(uint64_t new_flags);
