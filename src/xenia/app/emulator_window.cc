@@ -535,6 +535,71 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
   }
 }
 
+void EmulatorWindow::UserConfigDialog::OnDraw(ImGuiIO& io) {
+  kernel::KernelState* kernel_state =
+      emulator_window_.emulator_->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  // In the top-left corner so it's close to the menu bar from where it was
+  // opened.
+  // Origin Y coordinate 20 was taken from the Dear ImGui demo.
+  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+  // Alpha from Dear ImGui tooltips (0.35 from the overlay provides too low
+  // visibility). Translucent so some effect of the changes can still be seen
+  // through it.
+  ImGui::SetNextWindowBgAlpha(0.6f);
+  bool dialog_open = true;
+  if (!ImGui::Begin("User Settings", &dialog_open,
+                    ImGuiWindowFlags_NoCollapse |
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_HorizontalScrollbar)) {
+    ImGui::End();
+    return;
+  }
+
+  ImGui::TextUnformatted("Edit properties for the currently connected users.");
+  ImGui::Spacing();
+
+  ImGuiInputTextFlags input_flags =
+      ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_AutoSelectAll;
+
+  auto userCount = kernel_state->GetConnectedUsers();
+
+  if (!emulator_window_.emulator_->is_title_open()) {
+    if (userCount > 0) {
+      for (int i = 0; i < userCount; ++i) {
+        if (ImGui::TreeNodeEx(
+                fmt::format("Player {}", i).c_str(),
+                ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
+          char buffer[16] = {0};
+          std::strcpy(buffer, kernel_state->user_profile(i)->name().c_str());
+          if (ImGui::InputText("Gamertag", buffer, sizeof(buffer),
+                               input_flags)) {
+            kernel_state->user_profile(i)->SetGamertagString(buffer);
+          } else {
+            XELOGW(fmt::format(
+                       "Unable to open the configuration panel for user {}", i)
+                       .c_str());
+          }
+          ImGui::TreePop();
+        } else {
+          XELOGW("Unable to open the user configuration window");
+        }
+      }
+      if (ImGui::Button("Exit")) {
+        emulator_window_.ToggleUserConfigDialog();
+      }
+    }
+  } else {
+    ImGui::TextUnformatted(
+        "Editing profiles while running a title is not supported. "
+        "Please restart Xenia and try again.");
+  }
+}
+
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
@@ -638,13 +703,25 @@ bool EmulatorWindow::Initialize() {
   auto hid_menu = MenuItem::Create(MenuItem::Type::kPopup, "&HID");
   {
     hid_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Toggle controller vibration", "",
+        MenuItem::Type::kString, "&Toggle Vontroller Vibration", "",
         std::bind(&EmulatorWindow::ToggleControllerVibration, this)));
     hid_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Display controller hotkeys", "",
+        MenuItem::Type::kString, "&Display Controller Hotkeys", "",
         std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
   }
   main_menu->AddChild(std::move(hid_menu));
+
+  // User menu.
+  auto user_menu = MenuItem::Create(MenuItem::Type::kPopup, "&User");
+  {
+    user_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Open User Configuration", "",
+        std::bind(&EmulatorWindow::ToggleUserConfigDialog, this)));
+    user_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Open Profiles Folder", "",
+        std::bind(&EmulatorWindow::OpenProfilesFolder, this)));
+  }
+  main_menu->AddChild(std::move(user_menu));
 
   // Help menu.
   auto help_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Help");
@@ -1017,6 +1094,19 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
   } else {
     display_config_dialog_.reset();
   }
+}
+
+void EmulatorWindow::ToggleUserConfigDialog() {
+  if (!user_config_dialog_) {
+    user_config_dialog_ = std::unique_ptr<UserConfigDialog>(
+        new UserConfigDialog(imgui_drawer_.get(), *this));
+  } else {
+    user_config_dialog_.reset();
+  }
+}
+
+void EmulatorWindow::OpenProfilesFolder() { 
+    LaunchFileExplorer(emulator()->storage_root() / "profiles");
 }
 
 void EmulatorWindow::ToggleControllerVibration() {

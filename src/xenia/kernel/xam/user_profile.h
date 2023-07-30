@@ -336,6 +336,7 @@ class UserProfile {
                                  bool devkit = false);
 
   UserProfile(uint8_t index, const std::filesystem::path& profiles_root);
+  void SetGamertagString(std::string gamertag);
 
   uint64_t xuid_offline() const { return xuid_; }
   uint64_t xuid_online() const { return account_.xuid_online; }

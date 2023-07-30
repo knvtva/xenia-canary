@@ -162,6 +162,19 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
+  class UserConfigDialog final : public ui::ImGuiDialog {
+   public:
+    UserConfigDialog(ui::ImGuiDrawer* imgui_drawer,
+                     EmulatorWindow& emulator_window)
+        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {}
+
+   protected:
+    void OnDraw(ImGuiIO& io) override;
+
+   private:
+    EmulatorWindow& emulator_window_;
+  };
+
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context);
 
@@ -197,6 +210,8 @@ class EmulatorWindow {
   void GpuTraceFrame();
   void GpuClearCaches();
   void ToggleDisplayConfigDialog();
+  void ToggleUserConfigDialog();
+  void OpenProfilesFolder();
   void ToggleControllerVibration();
   void ShowCompatibility();
   void ShowFAQ();
@@ -233,6 +248,8 @@ class EmulatorWindow {
   bool initializing_shader_storage_ = false;
 
   std::unique_ptr<DisplayConfigDialog> display_config_dialog_;
+
+  std::unique_ptr<UserConfigDialog> user_config_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
 };

@@ -34,6 +34,38 @@ constexpr uint32_t kDashboardID = 0xFFFE07D1;
 
 std::u16string X_XAMACCOUNTINFO::GetGamertagString() const { return gamertag; }
 
+// Unsafe - we need to ensure profile is loaded
+void UserProfile::SetGamertagString(std::string gamertag) {
+  std::string::iterator itr = gamertag.begin();
+
+  // Get the length of the new gamertag to
+  // ensure we're within 1 - 16 characters
+  int newNameLength =
+      static_cast<int>(std::distance(gamertag.begin(), gamertag.end()));
+  
+  // Don't set an empty name
+  if (newNameLength == 0) {
+    XELOGI("Attempted to set an empty gamertag for user %s", name());
+    return;
+  }
+
+  auto finalLength = std::min(16, newNameLength);
+  std::advance(itr, finalLength);
+
+  // There's probably a better way to do this
+  char newBuffer[sizeof(account_.gamertag)];
+  std::copy(gamertag.begin(), itr, newBuffer);
+  std::copy(std::begin(newBuffer), std::end(newBuffer), account_.gamertag);
+
+  // TODO: Abstract file access logic
+  // used in this and UserProfile()
+  auto account_file = ProfileDir() / L"Account";
+  auto mmap_ = MappedMemory::Open(account_file, MappedMemory::Mode::kReadWrite,
+                                  0, sizeof(X_XAMACCOUNTINFO) + 0x18);
+  EncryptAccountFile(&account_, mmap_->data());
+  mmap_->Close(sizeof(X_XAMACCOUNTINFO) + 0x18);
+}
+
 bool UserProfile::DecryptAccountFile(const uint8_t* data,
                                      X_XAMACCOUNTINFO* output, bool devkit) {
   const uint8_t* key = util::GetXeKey(0x19, devkit);
