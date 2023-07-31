@@ -46,9 +46,9 @@
 
 using namespace rapidjson;
 
-DEFINE_string(api_address, "interstellarmc.cc:3074", "Xenia Master Server Address",
-              "Live");
-DEFINE_bool(logging, false, "Log Network Activity", "Live");
+DECLARE_string(api_address);
+
+DECLARE_bool(logging);
 
 // TODO: Remove - Codie
 std::size_t callback(const char* in, std::size_t size, std::size_t num,
