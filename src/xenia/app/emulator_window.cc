@@ -572,17 +572,20 @@ void EmulatorWindow::UserConfigDialog::OnDraw(ImGuiIO& io) {
     if (userCount > 0) {
       for (int i = 0; i < userCount; ++i) {
         if (ImGui::TreeNodeEx(
-                fmt::format("Player {}", i).c_str(),
+                fmt::format("Player {}", i + 1).c_str(),
                 ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
-          char buffer[16] = {0};
-          std::strcpy(buffer, kernel_state->user_profile(i)->name().c_str());
-          if (ImGui::InputText("Gamertag", buffer, sizeof(buffer),
-                               input_flags)) {
-            kernel_state->user_profile(i)->SetGamertagString(buffer);
-          } else {
-            XELOGW(fmt::format(
-                       "Unable to open the configuration panel for user {}", i)
-                       .c_str());
+          if (kernel_state->IsUserSignedIn(i)) {
+            auto user = kernel_state->user_profile(i);
+            char buffer[16] = {0};
+            std::strcpy(buffer, user->name().c_str());
+            if (ImGui::InputText("Gamertag", buffer, sizeof(buffer),
+                                 input_flags)) {
+              user->SetGamertagString(buffer);
+            } else {
+              XELOGW(fmt::format(
+                         "Unable to open gamertag config panel for user {}", i)
+                         .c_str());
+            }
           }
           ImGui::TreePop();
         } else {
@@ -703,7 +706,7 @@ bool EmulatorWindow::Initialize() {
   auto hid_menu = MenuItem::Create(MenuItem::Type::kPopup, "&HID");
   {
     hid_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Toggle Vontroller Vibration", "",
+        MenuItem::Type::kString, "&Toggle Controller Vibration", "",
         std::bind(&EmulatorWindow::ToggleControllerVibration, this)));
     hid_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "&Display Controller Hotkeys", "",
