@@ -46,7 +46,7 @@
 
 using namespace rapidjson;
 
-DEFINE_string(api_address, "127.0.0.1:36000", "Xenia Master Server Address",
+DEFINE_string(api_address, "interstellarmc.cc:3074", "Xenia Master Server Address",
               "Live");
 DEFINE_bool(logging, false, "Log Network Activity", "Live");
 
