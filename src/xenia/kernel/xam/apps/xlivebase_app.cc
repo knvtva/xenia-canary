@@ -55,6 +55,10 @@ XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state)
 X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t arg1,
                                             uint32_t arg2) {
   switch (message) {
+    case 0x00050009: {
+      XELOGD("XLiveBaseUnk580009({:08X}, {:08X}) unimplemented", arg1, arg2);
+      return X_E_SUCCESS;
+    }
     case 0x00058004: {
       // Called on startup, seems to just return a bool in the buffer.
       assert_true(!arg2 || arg2 == 4);
@@ -156,6 +160,14 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t arg1,
           "unimplemented",
           arg1, arg2);
       return X_E_FAIL;
+    }
+    case 0x00058035: {
+      XELOGD("XLiveBaseUnk58035({:08X}, {:08X}) unimplemented", arg1, arg2);
+      return X_E_SUCCESS;
+    }
+    case 0x00058037: {
+      XELOGD("XLiveBaseUnk58037({:08X}, {:08X}) unimplemented", arg1, arg2);
+      return X_E_SUCCESS;
     }
     case 0x00058046: {
       // Required to be successful for 4D530910 to detect signed-in profile
