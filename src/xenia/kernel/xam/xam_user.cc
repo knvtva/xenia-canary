@@ -702,7 +702,10 @@ class XStaticAchievementEnumerator : public XEnumerator {
     std::u16string unachieved;
     uint32_t image_id;
     uint32_t gamerscore;
-    uint64_t unlock_time;
+    struct {
+      uint32_t unk_0;
+      uint32_t unk_4;
+    } unlock_time;
     uint32_t flags;
   };
 
@@ -838,6 +841,13 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
         db.GetAchievements();
 
     for (const util::XdbfAchievementTableEntry& entry : achievement_list) {
+      auto is_unlocked =
+          kernel_state()->achievement_manager()->IsAchievementUnlocked(
+              entry.id);
+      auto unlock_time =
+          kernel_state()->achievement_manager()->GetAchievementUnlockTime(
+              entry.id);
+
       auto item = XStaticAchievementEnumerator::AchievementDetails{
           entry.id,
           xe::to_utf16(db.GetStringTableEntry(language, entry.label_id)),
@@ -845,8 +855,9 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
           xe::to_utf16(db.GetStringTableEntry(language, entry.unachieved_id)),
           entry.image_id,
           entry.gamerscore,
-          {0},
-          entry.flags};
+          (uint32_t)(unlock_time << 31),
+          (uint32_t)unlock_time,
+          is_unlocked ? entry.flags | 0x20000 : entry.flags};
 
       e->AppendItem(item);
     }
