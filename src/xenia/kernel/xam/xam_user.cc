@@ -834,6 +834,13 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
         db.GetAchievements();
 
     for (const util::XdbfAchievementTableEntry& entry : achievement_list) {
+      auto is_unlocked =
+          kernel_state()->achievement_manager()->IsAchievementUnlocked(
+              entry.id);
+      auto unlock_time =
+          kernel_state()->achievement_manager()->GetAchievementUnlockTime(
+              entry.id);
+
       auto item = XStaticAchievementEnumerator::AchievementDetails{
           entry.id,
           xe::to_utf16(db.GetStringTableEntry(language, entry.label_id)),
