@@ -42,6 +42,12 @@ DEFINE_int32(internal_display_resolution, 8,
              "   16=1920x1080\n",
              "Display");
 
+DEFINE_bool(kernel_report_hi_definition, true, 
+    "Tells the title whether it is running in a hi-definition video mode " 
+    "or not. Generally, this is needed if the internal display resolution "
+    "is set to 1024x768 or lower.", 
+    "Kernel");
+
 // BT.709 on modern monitors and TVs looks the closest to the Xbox 360 connected
 // to an HDTV.
 DEFINE_uint32(kernel_display_gamma_type, 2,
@@ -180,7 +186,7 @@ void VdQueryVideoMode(X_VIDEO_MODE* video_mode) {
   video_mode->is_interlaced = 0;
   video_mode->is_widescreen =
       ((video_mode->display_width / 4) > (video_mode->display_height / 3));
-  video_mode->is_hi_def = video_mode->display_width >= 0x400;
+  video_mode->is_hi_def = cvars::kernel_report_hi_definition;
   video_mode->refresh_rate = 60.0f;
   video_mode->video_standard = 1;  // NTSC
   video_mode->unknown_0x8a = 0x4A;
