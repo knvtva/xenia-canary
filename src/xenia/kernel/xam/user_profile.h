@@ -388,6 +388,7 @@ class UserProfile {
 
   bool UpdateTitleGpd(uint32_t title_id = -1);
   bool UpdateAllGpds();
+  std::map<uint32_t, uint32_t> contexts_;
 
  private:
   const std::filesystem::path& profiles_root_;
