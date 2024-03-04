@@ -46,6 +46,8 @@ namespace kernel {
 
 constexpr fourcc_t kKernelSaveSignature = make_fourcc("KRNL");
 
+static constexpr const uint16_t kBaseKernelBuildVersion = 1888;
+
 // (?), used by KeGetCurrentProcessType
 constexpr uint32_t X_PROCTYPE_IDLE = 0;
 constexpr uint32_t X_PROCTYPE_USER = 1;
@@ -92,6 +94,25 @@ struct X_TIME_STAMP_BUNDLE {
   uint32_t padding;
 };
 
+struct KernelVersion {
+  union {
+    xe::be<uint64_t> value;
+
+    struct {
+      xe::be<uint16_t> major;
+      xe::be<uint16_t> minor;
+      xe::be<uint16_t> build;
+      xe::be<uint16_t> qfe;
+    };
+  };
+
+  KernelVersion(uint16_t build_ver = kBaseKernelBuildVersion) {
+    major = 2;
+    minor = 0;
+    build = std::max(kBaseKernelBuildVersion, build_ver);
+    qfe = 0;
+  }
+};
 class KernelState {
  public:
   explicit KernelState(Emulator* emulator);
@@ -147,6 +168,8 @@ class KernelState {
 
   // Access must be guarded by the global critical region.
   util::ObjectTable* object_table() { return &object_table_; }
+
+  const KernelVersion* GetKernelVersion() const { return &kernel_version_; }
 
   uint32_t process_type() const;
   void set_process_type(uint32_t value);
@@ -259,6 +282,8 @@ class KernelState {
   std::unique_ptr<xam::ContentManager> content_manager_;
   std::map<uint8_t, std::unique_ptr<xam::UserProfile>> user_profiles_;
   std::unique_ptr<AchievementManager> achievement_manager_;
+
+  KernelVersion kernel_version_;
 
   xe::global_critical_region global_critical_region_;
 
