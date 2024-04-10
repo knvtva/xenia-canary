@@ -219,6 +219,8 @@ class EmulatorWindow {
   void FileOpen();
   void FileClose();
   void InstallContent();
+  void ExtractZarchive();
+  void CreateZarchive();
   void ShowContentDirectory();
   void CpuTimeScalarReset();
   void CpuTimeScalarSetHalf();
