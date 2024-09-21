@@ -77,7 +77,7 @@ jobs:
           if-no-files-found: error
       - name: Create release
         if: |
-          github.repository == 'xenia-canary/xenia-canary' &&
+          github.repository == 'knvtva/xenia-canary' &&
           github.event.action != 'pull_request' &&
           contains(github.ref, 'refs/heads/canary') &&
           github.ref != 'refs/heads/canary_base'
